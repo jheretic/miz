@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Install build deps
+        run: |
+          pacman -Syu --noconfirm --needed git rust pkgconf
+      - uses: actions/checkout@v4
+      - name: Cargo build
+        run: cargo build --verbose
+      - name: Cargo fmt
+        run: cargo fmt --check
+      - name: Cargo clippy
+        run: cargo clippy --tests -- -D warnings
+      - name: Cargo test (non-ignored)
+        run: cargo test --verbose
+
+  integration:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Install build deps
+        run: |
+          pacman -Syu --noconfirm --needed git rust pkgconf
+          pacman -Fy --noconfirm
+      - uses: actions/checkout@v4
+      - name: Run ignored integration tests
+        env:
+          MIZ_HAS_ALPM: "1"
+        run: cargo test --include-ignored --verbose
