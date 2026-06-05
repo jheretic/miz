@@ -6,13 +6,17 @@ use common::{install_fake_pkg, make_test_root, miz, FakePkg, TestRoot};
 
 fn read_reason(root: &TestRoot, name: &str, version: &str) -> Option<u8> {
     let desc = std::fs::read_to_string(root.local_pkg_dir(name, version).join("desc")).ok()?;
+    // libalpm omits the %REASON% block when reason == Explicit (0). The
+    // absence-as-Explicit convention is from be_local.c:1038 (only writes
+    // the block when info->reason is truthy). Treat missing as Some(0)
+    // when the desc itself exists.
     let mut lines = desc.lines();
     while let Some(line) = lines.next() {
         if line == "%REASON%" {
             return lines.next()?.trim().parse().ok();
         }
     }
-    None
+    Some(0)
 }
 
 #[test]

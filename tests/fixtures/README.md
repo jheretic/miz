@@ -150,3 +150,12 @@ on-disk bytes, so tests that snapshot the localdb stay reproducible.
   directory but errors with "database is incorrect version" if any
   package directory exists without the marker. `make_test_root` writes
   the marker at fixture-build time so `install_fake_pkg` always works.
+- **`%REASON%` is omitted when reason is Explicit (0).** libalpm writes
+  the block only for non-default reasons (be_local.c:1038 — `if(info->reason)`
+  guards the fprintf). On rewrite (e.g. after `-D --asexplicit`), the
+  block is dropped from `desc` entirely. Test parsers that read `desc`
+  back must treat absence-of-block as Explicit, not as missing data.
+  `install_fake_pkg` writes the block unconditionally for fixture
+  authoring convenience; libalpm's rewrite normalises this to the
+  canonical format on first transaction touch.
+  See `tests/database.rs::read_reason` for the canonical reader.
