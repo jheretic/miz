@@ -39,4 +39,4 @@ jobs:
       - name: Run ignored integration tests
         env:
           MIZ_HAS_ALPM: "1"
-        run: cargo test --include-ignored --verbose
+        run: cargo test -- --include-ignored --verbose
