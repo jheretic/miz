@@ -519,10 +519,8 @@ fn parse_pkg_filename(name: &str) -> Option<(String, String)> {
         s
     } else if let Some(s) = name.strip_suffix(".pkg.tar.Z") {
         s
-    } else if let Some(s) = name.strip_suffix(".pkg.tar") {
-        s
     } else {
-        return None;
+        name.strip_suffix(".pkg.tar")?
     };
 
     let parts: Vec<&str> = stem.rsplitn(4, '-').collect();
