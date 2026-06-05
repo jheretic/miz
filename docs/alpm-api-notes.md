@@ -157,25 +157,39 @@ Used in `src/config.rs::build`. Do not roll your own.
 ## set_dbext for -F mode
 
 ```
-ctx.alpm.set_dbext(".files");
+alpm.set_dbext(".files");
 ```
 
-Must be called before iterating `syncdbs()` in files mode. After this call,
-all `db.pkgs()`/`db.update()` operate on `.files` databases. No per-database
-extension switch.
+**Must be called BEFORE `alpm_utils::configure_alpm`** (or before any
+manual `register_syncdb_mut`). libalpm parses `%FILES%` blocks while
+reading the syncdb archive on registration; setting dbext after registration
+only affects future `db.update()` calls, not the in-memory pkgcache. The
+alpm-utils crate docs the trap explicitly
+(alpm-utils-5.0.0/src/conf.rs::configure_alpm doc-comment):
+
+> You probably just want to use alpm_with_conf unless you need to do
+> something before the repos are registered such as setting the db ext.
+
+Miz handles this via `config::build_with_dbext(cli, Some(".files"))` for
+`Operation::Files`, dispatched from `main.rs`. The old call in
+`files::run` that came AFTER `config::build` was a no-op as far as the
+filelist was concerned — `db.update()` worked because that uses the
+configured dbext at fetch time, but `pkg.files()` always returned the
+empty filelist loaded from `.db`.
 
 `-Fy` flow (see `src/operations/files.rs`):
 
 ```
-ctx.alpm.set_dbext(".files");
+// dbext was set to '.files' in config::build_with_dbext
 if args.refresh > 0 {
     let force = args.refresh >= 2;
-    let _ = ctx.alpm.syncdbs_mut().update(force)?;
+    let _ = ctx.alpm.syncdbs_mut().update(force)?;  // fetches .files
 }
 ```
 
 PLAN §3 said: "if the binding does not expose files-DB iteration, fall back
 to pacman -F". It DOES, via `set_dbext`. No fallback needed (Phase 2.5).
+But: the call order matters, surfaced by CI in Phase 6.
 
 ---
 

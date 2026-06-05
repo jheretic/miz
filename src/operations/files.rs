@@ -11,7 +11,10 @@ pub fn run(args: Args, ctx: &mut Context) -> Result<()> {
         ));
     }
 
-    ctx.alpm.set_dbext(".files");
+    // dbext is already set to '.files' by config::build_with_dbext (dispatched
+    // from main.rs based on Operation::Files). Setting it here would be too
+    // late: alpm_utils::configure_alpm has already registered + loaded the
+    // syncdbs.
 
     if args.refresh > 0 {
         let force = args.refresh >= 2;

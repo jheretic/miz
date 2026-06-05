@@ -28,8 +28,12 @@ fn dispatch(cli: Cli) -> error::Result<()> {
         cli.op,
         Operation::Version | Operation::Images(_) | Operation::Completions { .. }
     );
+    let dbext = match &cli.op {
+        Operation::Files(_) => Some(".files"),
+        _ => None,
+    };
     let mut ctx = if needs_context {
-        Some(config::build(&cli)?)
+        Some(config::build_with_dbext(&cli, dbext)?)
     } else {
         None
     };
