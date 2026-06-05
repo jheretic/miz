@@ -144,3 +144,9 @@ on-disk bytes, so tests that snapshot the localdb stay reproducible.
   resolution) assumes they agree.
 - `%ARCH% = any` is the easiest path; tests want to be host-agnostic.
 - `%SIZE%` is the installed size in bytes; `0` is accepted.
+- **`<dbpath>/local/ALPM_DB_VERSION` must exist** and contain the current
+  schema version (currently `9`, per `ALPM_LOCAL_DB_VERSION` in
+  `pacman/lib/libalpm/be_local.c`). libalpm self-heals an empty `local/`
+  directory but errors with "database is incorrect version" if any
+  package directory exists without the marker. `make_test_root` writes
+  the marker at fixture-build time so `install_fake_pkg` always works.

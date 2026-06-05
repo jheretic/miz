@@ -83,6 +83,11 @@ pub fn make_test_root() -> TestRoot {
     let conf = render_pacman_conf(&root);
     fs::write(root.join("etc/pacman.conf"), conf).expect("write pacman.conf");
 
+    // libalpm refuses to open a non-empty local DB without this marker.
+    // ALPM_LOCAL_DB_VERSION = 9 in libalpm 16.x (alpm-sys-5.0.1 pacman/lib/libalpm/be_local.c:48).
+    fs::write(root.join("var/lib/pacman/local/ALPM_DB_VERSION"), "9\n")
+        .expect("write ALPM_DB_VERSION");
+
     TestRoot {
         path: root,
         _tmp: tmp,
