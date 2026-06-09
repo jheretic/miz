@@ -1,0 +1,79 @@
+# Reference miz.toml — exhaustive listing of pacman.conf-equivalent
+# directives in their TOML form. All values shown are the defaults
+# (matching the bundled /etc/pacman.conf); omitted keys fall back to
+# these. See src/miz_config.rs for the canonical schema.
+#
+# Future miz extensions ([images], [hooks], etc.) will live alongside
+# [options] in this file. The schema does NOT deny unknown fields so
+# new sections won't break older miz binaries.
+
+[options]
+
+# ---- paths ----
+root_dir = "/"
+db_path = "/var/lib/pacman/"
+cache_dir = ["/var/cache/pacman/pkg/"]
+hook_dir = ["/etc/pacman.d/hooks/"]
+gpg_dir = "/etc/pacman.d/gnupg/"
+log_file = "/var/log/pacman.log"
+
+# ---- behaviour lists ----
+hold_pkg = []                       # never auto-remove these
+ignore_pkg = []                     # never upgrade these
+ignore_group = []                   # never upgrade members of these groups
+architecture = ["auto"]             # ["auto"] resolves at runtime
+no_upgrade = []                     # never modify these files
+no_extract = []                     # never extract these files
+clean_method = ["KeepInstalled"]    # alt: ["KeepCurrent"]
+
+# ---- downloads ----
+# xfer_command = "/usr/bin/curl -L -C - -f -o %o %u"  # optional override
+parallel_downloads = 5
+disable_download_timeout = false
+# download_user = "alpm"                              # drop privileges for fetches
+
+# ---- signature levels ----
+# Values per pacman(5): Required, Optional, Never;
+# DatabaseRequired, DatabaseOptional, DatabaseNever;
+# PackageRequired, PackageOptional, PackageNever;
+# TrustedOnly, TrustAll;
+# (prefix with !Foo to disable an inherited flag)
+sig_level = ["Required", "DatabaseOptional"]
+local_file_sig_level = ["Optional"]
+remote_file_sig_level = ["Required"]
+
+# ---- sandbox ----
+disable_sandbox = false
+disable_sandbox_filesystem = false
+disable_sandbox_syscalls = false
+
+# ---- UI / misc ----
+use_syslog = false
+color = false
+total_download = false
+check_space = true
+verbose_pkg_lists = false
+chomp = false                       # the ILoveCandy pac-man easter egg
+
+# Deprecated: pacman dropped delta support, still parsed for compatibility.
+use_delta = 0.0
+
+# ---- repositories ----
+# One [[repos]] table per repo. Order matters: pacman tries them in this
+# order and the first match wins.
+
+[[repos]]
+name = "core"
+servers = ["https://geo.mirror.pkgbuild.com/$repo/os/$arch"]
+# sig_level overrides [options].sig_level for this repo only
+# sig_level = ["Required", "DatabaseRequired"]
+# usage subset: Sync, Search, Install, Upgrade, All
+# usage = ["All"]
+
+[[repos]]
+name = "extra"
+include = ["/etc/pacman.d/mirrorlist"]
+
+# [[repos]]
+# name = "multilib"
+# include = ["/etc/pacman.d/mirrorlist"]

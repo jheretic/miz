@@ -2,6 +2,7 @@ mod cli;
 mod config;
 mod error;
 mod exit;
+mod miz_config;
 mod operations;
 
 use clap::Parser;
