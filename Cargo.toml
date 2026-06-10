@@ -1,32 +1,15 @@
-[package]
-name        = "miz"
-version     = "0.1.0"
-edition     = "2021"
-description = "Package and update manager for the Archetype Linux distribution"
-license     = "GPL-2.0-or-later"
-build       = "build.rs"
+[workspace]
+resolver = "2"
+members = [
+    "crates/miz",
+    "crates/miz-convert",
+]
 
-[build-dependencies]
-clap          = { version = "4", features = ["derive"] }
-clap_complete = "4"
-clap_mangen   = "0.2"
-
-[dependencies]
-alpm               = "5"
-alpm-sys           = "5"
-alpm-utils         = { version = "5", features = ["conf"] }
-ctrlc              = { version = "3", features = ["termination"] }
-clap               = { version = "4", features = ["derive", "wrap_help"] }
-clap_complete      = "4"
-thiserror          = "2"
-tracing            = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-regex              = "1"
-indicatif          = "0.17"
-serde              = { version = "1", features = ["derive"] }
-toml               = "0.8"
-
-[dev-dependencies]
-assert_cmd = "2"
-predicates = "3"
-tempfile   = "3"
+# Workspace-wide deps that more than one crate will use. Crates opt in
+# per-Cargo.toml via `dep = { workspace = true }`. Versions stay here
+# so a bump touches one file instead of N.
+[workspace.dependencies]
+anyhow    = "1"
+serde     = { version = "1", features = ["derive"] }
+thiserror = "2"
+toml      = "0.8"
