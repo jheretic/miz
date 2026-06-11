@@ -1,0 +1,60 @@
+# Maintainer: Josh King <josh@throneless.tech>
+pkgname=miz
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Package and update manager for the Archetype Linux distribution'
+arch=('x86_64')
+url='https://github.com/THRONELESS/miz'
+license=('GPL-2.0-or-later')
+depends=('pacman' 'gpgme')
+makedepends=('cargo' 'pkgconf')
+
+# TODO: replace with the GitHub release tarball URL once v$pkgver is tagged.
+# Until then, build locally via:
+#   makepkg --noextract  (uses the current source/ checkout)
+# or override source=() on the makepkg command line.
+source=("$pkgname-$pkgver.tar.gz::https://github.com/THRONELESS/miz/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+    cd "miz-$pkgver"
+    export CARGO_HOME="$srcdir/cargo-home"
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "miz-$pkgver"
+    export CARGO_HOME="$srcdir/cargo-home"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --frozen --release -p miz
+}
+
+check() {
+    cd "miz-$pkgver"
+    export CARGO_HOME="$srcdir/cargo-home"
+    export RUSTUP_TOOLCHAIN=stable
+    # Non-ignored tests only. Integration tests are #[ignore]-gated;
+    # makepkg's check() environment isn't reliably an interactive Arch
+    # install with arbitrary packages, so we don't pass --include-ignored.
+    cargo test --frozen --release -p miz
+}
+
+package() {
+    cd "miz-$pkgver"
+    install -Dm755 "target/release/miz" "$pkgdir/usr/bin/miz"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+
+    # Manpages emitted by build.rs into OUT_DIR.
+    local mandir="$srcdir/miz-$pkgver/target/release/build"
+    local manpage
+    for manpage in "$mandir"/miz-*/out/*.1; do
+        [ -f "$manpage" ] || continue
+        install -Dm644 "$manpage" "$pkgdir/usr/share/man/man1/$(basename "$manpage")"
+    done
+
+    # Shell completions: generated at runtime by `miz completions <shell>`.
+    # Users opt in; we don't ship pre-generated completions here so the
+    # package stays minimal and version-locked to whatever miz emits.
+}

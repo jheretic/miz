@@ -1,0 +1,46 @@
+# Maintainer: Josh King <josh@throneless.tech>
+pkgname=miz-convert
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Convert pacman.conf to miz.toml'
+arch=('x86_64')
+url='https://github.com/THRONELESS/miz'
+license=('GPL-2.0-or-later')
+depends=('pacman')   # pacman-conf binary at runtime; pacmanconf crate shells out
+makedepends=('cargo' 'pkgconf')
+
+# TODO: replace with the GitHub release tarball URL once v$pkgver is tagged.
+source=("miz-$pkgver.tar.gz::https://github.com/THRONELESS/miz/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+    cd "miz-$pkgver"
+    export CARGO_HOME="$srcdir/cargo-home"
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "miz-$pkgver"
+    export CARGO_HOME="$srcdir/cargo-home"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --frozen --release -p miz-convert
+}
+
+check() {
+    cd "miz-$pkgver"
+    export CARGO_HOME="$srcdir/cargo-home"
+    export RUSTUP_TOOLCHAIN=stable
+    # miz-config (pure rust, no alpm) + miz-convert non-ignored tests.
+    # miz-convert's unit tests are #[ignore]-gated on pacman-conf availability;
+    # check() runs in an Arch chroot where pacman-conf IS available, so we
+    # opt them in here.
+    cargo test --frozen --release -p miz-config
+    cargo test --frozen --release -p miz-convert -- --include-ignored
+}
+
+package() {
+    cd "miz-$pkgver"
+    install -Dm755 "target/release/miz-convert" "$pkgdir/usr/bin/miz-convert"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
