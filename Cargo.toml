@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/miz",
+    "crates/miz-config",
     "crates/miz-convert",
 ]
 

@@ -293,13 +293,22 @@ mod tests {
         assert_eq!(c.repos[0].name, "core");
         assert_eq!(c.repos[0].servers.len(), 1);
         assert_eq!(c.repos[1].name, "extra");
-        assert_eq!(c.repos[1].include, vec![PathBuf::from("/etc/pacman.d/mirrorlist")]);
-        assert_eq!(c.repos[1].usage, vec!["Sync".to_string(), "Search".to_string()]);
+        assert_eq!(
+            c.repos[1].include,
+            vec![PathBuf::from("/etc/pacman.d/mirrorlist")]
+        );
+        assert_eq!(
+            c.repos[1].usage,
+            vec!["Sync".to_string(), "Search".to_string()]
+        );
 
         let serialized = toml::to_string(&c).unwrap();
         let reparsed: MizConfig = toml::from_str(&serialized).unwrap();
         assert_eq!(reparsed.repos.len(), c.repos.len());
-        assert_eq!(reparsed.options.parallel_downloads, c.options.parallel_downloads);
+        assert_eq!(
+            reparsed.options.parallel_downloads,
+            c.options.parallel_downloads
+        );
     }
 
     #[test]
@@ -329,6 +338,9 @@ mod tests {
             servers = ["https://archive.example/$repo"]
         "#;
         let c: MizConfig = toml::from_str(src).unwrap();
-        assert_eq!(c.repos[0].sig_level, vec!["Optional".to_string(), "TrustAll".to_string()]);
+        assert_eq!(
+            c.repos[0].sig_level,
+            vec!["Optional".to_string(), "TrustAll".to_string()]
+        );
     }
 }

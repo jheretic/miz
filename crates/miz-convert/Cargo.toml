@@ -6,7 +6,10 @@ description = "Convert pacman.conf to miz.toml"
 license     = "GPL-2.0-or-later"
 
 [dependencies]
-anyhow    = { workspace = true }
-serde     = { workspace = true }
-thiserror = { workspace = true }
-toml      = { workspace = true }
+anyhow      = { workspace = true }
+miz-config  = { path = "../miz-config" }
+pacmanconf  = "3"
+toml        = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

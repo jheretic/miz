@@ -1,0 +1,10 @@
+[package]
+name        = "miz-config"
+version     = "0.1.0"
+edition     = "2021"
+description = "miz.toml schema and (de)serialization"
+license     = "GPL-2.0-or-later"
+
+[dependencies]
+serde = { workspace = true }
+toml  = { workspace = true }

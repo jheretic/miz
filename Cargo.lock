@@ -500,12 +500,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "miz-config"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "miz-convert"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "serde",
- "thiserror",
+ "miz-config",
+ "pacmanconf",
+ "tempfile",
  "toml",
 ]
 
