@@ -1,4 +1,5 @@
 use crate::exit;
+use std::path::PathBuf;
 
 #[derive(thiserror::Error, Debug)]
 pub enum MizError {
@@ -8,6 +9,12 @@ pub enum MizError {
     Io(#[from] std::io::Error),
     #[error("regex: {0}")]
     Regex(#[from] regex::Error),
+    #[error("{path}: {source}")]
+    Toml {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
     #[error("package '{0}' was not found")]
     PackageNotFound(String),
     #[error("not implemented")]
@@ -31,6 +38,7 @@ impl MizError {
             MizError::Deptest => exit::DEPTEST,
             MizError::Io(_)
             | MizError::Regex(_)
+            | MizError::Toml { .. }
             | MizError::PackageNotFound(_)
             | MizError::DatabaseErrors(_)
             | MizError::NotImplemented

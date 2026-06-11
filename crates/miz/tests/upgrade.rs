@@ -39,7 +39,7 @@ fn dash_u_rejects_asdeps_with_asexplicit() {
 }
 
 #[test]
-#[ignore = "requires libalpm + pacman-conf; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
 fn dash_u_missing_file_errors_cleanly() {
     let root = make_test_root();
     miz()
@@ -58,7 +58,7 @@ fn dash_u_missing_file_errors_cleanly() {
 }
 
 #[test]
-#[ignore = "requires libalpm + pacman-conf + MIZ_TEST_PKG_PATH set to a real .pkg.tar.zst"]
+#[ignore = "requires libalpm at runtime with MIZ_TEST_PKG_PATH set to a real .pkg.tar.zst"]
 fn dash_u_installs_a_local_pkg_file() {
     let Some(pkg_path) = test_pkg_path() else {
         eprintln!("skipping: MIZ_TEST_PKG_PATH unset");
@@ -81,7 +81,7 @@ fn dash_u_installs_a_local_pkg_file() {
 }
 
 #[test]
-#[ignore = "requires libalpm + pacman-conf + MIZ_TEST_PKG_PATH set to a real .pkg.tar.zst"]
+#[ignore = "requires libalpm at runtime with MIZ_TEST_PKG_PATH set to a real .pkg.tar.zst"]
 fn dash_up_prints_without_installing() {
     let Some(pkg_path) = test_pkg_path() else {
         eprintln!("skipping: MIZ_TEST_PKG_PATH unset");

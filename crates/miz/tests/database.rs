@@ -20,7 +20,7 @@ fn read_reason(root: &TestRoot, name: &str, version: &str) -> Option<u8> {
 }
 
 #[test]
-#[ignore = "requires libalpm + system pacman.conf; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
 fn dash_d_no_flags_exits_one_with_usage_hint() {
     miz()
         .arg("-D")
@@ -31,13 +31,13 @@ fn dash_d_no_flags_exits_one_with_usage_hint() {
 }
 
 #[test]
-#[ignore = "requires libalpm + system pacman.conf; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
 fn dash_dk_runs_against_host_dbs() {
     let _ = miz().arg("-Dk").assert();
 }
 
 #[test]
-#[ignore = "requires libalpm + pacman-conf; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
 fn dash_d_asdeps_marks_explicit_package_as_dependency() {
     let root = make_test_root();
     let pkg = FakePkg {
@@ -64,7 +64,7 @@ fn dash_d_asdeps_marks_explicit_package_as_dependency() {
 }
 
 #[test]
-#[ignore = "requires libalpm + pacman-conf; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
 fn dash_d_asexplicit_marks_dependency_as_explicit() {
     let root = make_test_root();
     let pkg = FakePkg {
@@ -91,7 +91,7 @@ fn dash_d_asexplicit_marks_dependency_as_explicit() {
 }
 
 #[test]
-#[ignore = "requires libalpm + pacman-conf; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
 fn dash_d_asdeps_unknown_package_errors() {
     let root = make_test_root();
     miz()

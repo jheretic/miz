@@ -4,7 +4,7 @@
 //
 // Witness: parse succeeded and dispatch reached past clap if the binary
 // runs `config::build` (which fails predictably against a non-existent
-// --root + missing /etc/pacman.conf) rather than aborting with a clap
+// --root + missing /etc/miz.toml) rather than aborting with a clap
 // parse error. Updated for Phase 1.2 (config::build now runs before any
 // op stub).
 

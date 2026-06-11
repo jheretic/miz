@@ -48,7 +48,10 @@ fn load_config(override_path: Option<&Path>) -> Result<MizConfig> {
     let path = override_path.unwrap_or(Path::new(DEFAULT_CONFIG_PATH));
     let bytes = fs::read_to_string(path)
         .map_err(|e| MizError::Other(format!("{}: {e}", path.display())))?;
-    toml::from_str(&bytes).map_err(|e| MizError::Other(format!("{}: {e}", path.display())))
+    toml::from_str(&bytes).map_err(|source| MizError::Toml {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 fn apply_config(alpm: &mut Alpm, conf: &MizConfig) -> Result<()> {

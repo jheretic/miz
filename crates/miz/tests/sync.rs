@@ -32,19 +32,19 @@ fn dash_ss_requires_pattern_value() {
 }
 
 #[test]
-#[ignore = "requires libalpm + system pacman.conf; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
 fn dash_ss_runs_against_system_alpm() {
     miz().args(["-Ss", "^bash$"]).assert().success();
 }
 
 #[test]
-#[ignore = "requires libalpm + system pacman.conf"]
+#[ignore = "requires libalpm at runtime"]
 fn dash_sg_no_args_lists_groups() {
     miz().args(["-Sg"]).assert().success();
 }
 
 #[test]
-#[ignore = "requires libalpm + system pacman.conf"]
+#[ignore = "requires libalpm at runtime"]
 fn dash_si_nonexistent_package_exits_nonzero() {
     miz()
         .args(["-Si", "definitely-not-a-real-package-xyz"])
@@ -149,7 +149,7 @@ fn dash_sc_help_lists_clean() {
 }
 
 #[test]
-#[ignore = "requires libalpm + pacman-conf"]
+#[ignore = "requires libalpm at runtime"]
 fn dash_sc_removes_uninstalled_cached_pkgs() {
     let root = make_test_root();
     install_fake_pkg(&root, &FakePkg::minimal("keepme", "1.0-1"));
@@ -180,7 +180,7 @@ fn dash_sc_removes_uninstalled_cached_pkgs() {
 }
 
 #[test]
-#[ignore = "requires libalpm + pacman-conf"]
+#[ignore = "requires libalpm at runtime"]
 fn dash_scc_removes_all_cached_pkgs() {
     let root = make_test_root();
     install_fake_pkg(&root, &FakePkg::minimal("keepme", "1.0-1"));
@@ -208,7 +208,7 @@ fn dash_scc_removes_all_cached_pkgs() {
 }
 
 #[test]
-#[ignore = "requires libalpm + pacman-conf + populated syncdbs"]
+#[ignore = "requires libalpm at runtime with populated syncdbs"]
 fn dash_sp_print_only() {
     let root = make_test_root();
     miz()
@@ -225,7 +225,7 @@ fn dash_sp_print_only() {
 }
 
 #[test]
-#[ignore = "requires libalpm + pacman-conf + populated syncdbs"]
+#[ignore = "requires libalpm at runtime with populated syncdbs"]
 fn dash_sw_download_only() {
     let root = make_test_root();
     miz()
@@ -243,7 +243,7 @@ fn dash_sw_download_only() {
 }
 
 #[test]
-#[ignore = "requires libalpm + pacman-conf + populated syncdbs"]
+#[ignore = "requires libalpm at runtime with populated syncdbs"]
 fn dash_s_install_against_test_root() {
     let root = make_test_root();
     let _ = miz()

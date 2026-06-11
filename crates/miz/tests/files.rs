@@ -18,7 +18,7 @@ fn dash_f_help_lists_files_flags() {
 }
 
 #[test]
-#[ignore = "requires libalpm + system pacman.conf; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
 fn dash_f_with_no_targets_and_no_refresh_errors() {
     miz()
         .args(["-F"])
@@ -28,7 +28,7 @@ fn dash_f_with_no_targets_and_no_refresh_errors() {
 }
 
 #[test]
-#[ignore = "requires libalpm + system pacman.conf; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
 fn dash_fl_with_regex_is_rejected() {
     miz()
         .args(["-Flx", "anything"])

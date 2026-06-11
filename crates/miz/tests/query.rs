@@ -5,7 +5,7 @@ use predicates::prelude::*;
 use common::{install_fake_pkg, make_test_root, miz, FakePkg};
 
 #[test]
-#[ignore = "requires libalpm + pacman-conf; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
 fn dash_qk_reports_zero_missing_when_all_files_present() {
     let root = make_test_root();
     let pkg = FakePkg {
@@ -34,7 +34,7 @@ fn dash_qk_reports_zero_missing_when_all_files_present() {
 }
 
 #[test]
-#[ignore = "requires libalpm + pacman-conf; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
 fn dash_qk_counts_missing_files_and_exits_nonzero() {
     let root = make_test_root();
     let pkg = FakePkg {
@@ -71,7 +71,7 @@ fn dash_qk_counts_missing_files_and_exits_nonzero() {
 }
 
 #[test]
-#[ignore = "requires libalpm + pacman-conf; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
 fn dash_qkk_appends_altered_count_on_summary_line() {
     let root = make_test_root();
     let pkg = FakePkg {
@@ -97,7 +97,7 @@ fn dash_qkk_appends_altered_count_on_summary_line() {
 }
 
 #[test]
-#[ignore = "requires libalpm + pacman-conf; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
 fn dash_qk_unknown_package_errors() {
     let root = make_test_root();
 

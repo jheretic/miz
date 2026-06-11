@@ -5,7 +5,7 @@ use predicates::prelude::*;
 use common::{install_fake_pkg, make_test_root, miz, FakePkg};
 
 #[test]
-#[ignore = "requires libalpm + pacman-conf; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
 fn dash_r_removes_an_installed_package() {
     let root = make_test_root();
     install_fake_pkg(&root, &FakePkg::minimal("foo", "1.0-1"));
@@ -28,7 +28,7 @@ fn dash_r_removes_an_installed_package() {
 }
 
 #[test]
-#[ignore = "requires libalpm + pacman-conf; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
 fn dash_rp_prints_without_removing() {
     let root = make_test_root();
     install_fake_pkg(&root, &FakePkg::minimal("baz", "3.0-1"));
@@ -52,7 +52,7 @@ fn dash_rp_prints_without_removing() {
 }
 
 #[test]
-#[ignore = "requires libalpm + pacman-conf; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
 fn dash_r_unknown_package_errors() {
     let root = make_test_root();
 

@@ -45,7 +45,7 @@ fn dash_q_help_lists_query_flags() {
 }
 
 #[test]
-#[ignore = "requires libalpm + system pacman.conf; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
 fn dash_qi_nonexistent_package_exits_nonzero() {
     miz()
         .args(["-Qi", "definitely-not-a-real-package-xyz"])
