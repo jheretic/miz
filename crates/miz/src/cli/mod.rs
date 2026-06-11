@@ -10,7 +10,7 @@ use clap_complete::Shell;
     disable_help_subcommand = true
 )]
 pub struct Cli {
-    /// Override pacman.conf path
+    /// Override miz.toml path (default: /etc/miz.toml)
     #[arg(long, global = true, value_name = "FILE")]
     pub config: Option<std::path::PathBuf>,
 

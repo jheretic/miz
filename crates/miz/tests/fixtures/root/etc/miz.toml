@@ -1,0 +1,16 @@
+# Minimal miz.toml for integration tests. @PLACEHOLDER@ values are
+# rewritten by tests/common/mod.rs::make_test_root() at runtime.
+
+[options]
+root_dir = "@ROOTDIR@"
+db_path = "@DBPATH@"
+cache_dir = ["@CACHEDIR@"]
+log_file = "@LOGFILE@"
+gpg_dir = "@GPGDIR@"
+hold_pkg = ["pacman"]
+architecture = ["auto"]
+sig_level = ["Never"]
+local_file_sig_level = ["Never"]
+
+[[repos]]
+name = "core"

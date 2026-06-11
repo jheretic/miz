@@ -1,35 +1,36 @@
 use crate::cli::Cli;
-use crate::error::Result;
-use std::path::PathBuf;
+use crate::error::{MizError, Result};
+use alpm::{Alpm, SigLevel, Usage};
+use miz_config::{MizConfig, Repository};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 pub struct Context {
     pub alpm: alpm::Alpm,
     pub root: PathBuf,
 }
 
+const DEFAULT_CONFIG_PATH: &str = "/etc/miz.toml";
+
 /// Build a Context with an optional sync-db file extension override.
 ///
-/// libalpm parses `%FILES%` blocks while reading the syncdb archive, and
-/// `configure_alpm` (alpm-utils) registers + loads every repo. The dbext
-/// must therefore be set BEFORE `configure_alpm` runs, otherwise repos
-/// load from `.db` and `pkg.files()` returns an empty filelist forever
-/// (alpm-utils-5.0.0 conf.rs::configure_alpm doc-comment calls this out
-/// explicitly: "set the db ext" before registering repos).
+/// libalpm parses `%FILES%` blocks while reading the syncdb archive on
+/// registration. `set_dbext` must therefore be called BEFORE the repos
+/// are registered, otherwise repos load from `.db` and `pkg.files()`
+/// returns an empty filelist forever.
 ///
 /// `-F` operations pass `Some(".files")`; everything else passes `None`.
 pub fn build_with_dbext(cli: &Cli, dbext: Option<&str>) -> Result<Context> {
-    let config_path = cli.config.as_deref().and_then(|p| p.to_str());
-    let root_arg = cli.root.as_deref().and_then(|p| p.to_str());
-    let conf = alpm_utils::config::Config::with_opts(None, config_path, root_arg)?;
+    let conf = load_config(cli.config.as_deref())?;
 
     let root = cli
         .root
         .clone()
-        .unwrap_or_else(|| PathBuf::from(&conf.root_dir));
+        .unwrap_or_else(|| conf.options.root_dir.clone());
     let dbpath = cli
         .dbpath
         .clone()
-        .unwrap_or_else(|| PathBuf::from(&conf.db_path));
+        .unwrap_or_else(|| conf.options.db_path.clone());
 
     let mut alpm = alpm::Alpm::new(
         root.as_os_str().as_encoded_bytes().to_vec(),
@@ -38,7 +39,144 @@ pub fn build_with_dbext(cli: &Cli, dbext: Option<&str>) -> Result<Context> {
     if let Some(ext) = dbext {
         alpm.set_dbext(ext);
     }
-    alpm_utils::configure_alpm(&mut alpm, &conf)?;
+    apply_config(&mut alpm, &conf)?;
 
     Ok(Context { alpm, root })
+}
+
+fn load_config(override_path: Option<&Path>) -> Result<MizConfig> {
+    let path = override_path.unwrap_or(Path::new(DEFAULT_CONFIG_PATH));
+    let bytes = fs::read_to_string(path)
+        .map_err(|e| MizError::Other(format!("{}: {e}", path.display())))?;
+    toml::from_str(&bytes).map_err(|e| MizError::Other(format!("{}: {e}", path.display())))
+}
+
+fn apply_config(alpm: &mut Alpm, conf: &MizConfig) -> Result<()> {
+    let opts = &conf.options;
+    alpm.set_cachedirs(paths_to_strs(&opts.cache_dir).iter().copied())?;
+    alpm.set_hookdirs(paths_to_strs(&opts.hook_dir).iter().copied())?;
+    alpm.set_gpgdir(path_to_str(&opts.gpg_dir))?;
+    alpm.set_logfile(path_to_str(&opts.log_file))?;
+    alpm.set_ignorepkgs(opts.ignore_pkg.iter().map(String::as_str))?;
+    alpm.set_ignoregroups(opts.ignore_group.iter().map(String::as_str))?;
+    alpm.set_architectures(opts.architecture.iter().map(String::as_str))?;
+    alpm.set_noupgrades(opts.no_upgrade.iter().map(String::as_str))?;
+    alpm.set_noextracts(opts.no_extract.iter().map(String::as_str))?;
+    alpm.set_default_siglevel(parse_sig_level(&opts.sig_level))?;
+    alpm.set_local_file_siglevel(parse_sig_level(&opts.local_file_sig_level))?;
+    alpm.set_remote_file_siglevel(parse_sig_level(&opts.remote_file_sig_level))?;
+    alpm.set_use_syslog(opts.use_syslog);
+    alpm.set_check_space(opts.check_space);
+    alpm.set_disable_dl_timeout(opts.disable_download_timeout);
+    alpm.set_parallel_downloads(opts.parallel_downloads as u32);
+    let sb_fs = opts.disable_sandbox_filesystem || opts.disable_sandbox;
+    let sb_sc = opts.disable_sandbox_syscalls || opts.disable_sandbox;
+    alpm.set_disable_sandbox_filesystem(sb_fs);
+    alpm.set_disable_sandbox_syscalls(sb_sc);
+    alpm.set_sandbox_user(opts.download_user.clone())?;
+
+    for repo in &conf.repos {
+        register_repo(alpm, repo)?;
+    }
+    Ok(())
+}
+
+fn register_repo(alpm: &mut Alpm, repo: &Repository) -> Result<()> {
+    let sig = if repo.sig_level.is_empty() {
+        SigLevel::USE_DEFAULT
+    } else {
+        parse_sig_level(&repo.sig_level)
+    };
+    let db = alpm.register_syncdb_mut(repo.name.as_str(), sig)?;
+    db.set_servers(repo.servers.iter().map(String::as_str))?;
+
+    let mut usage = Usage::NONE;
+    for v in &repo.usage {
+        match v.as_str() {
+            "Sync" => usage |= Usage::SYNC,
+            "Search" => usage |= Usage::SEARCH,
+            "Install" => usage |= Usage::INSTALL,
+            "Upgrade" => usage |= Usage::UPGRADE,
+            "All" => usage = Usage::ALL,
+            _ => {}
+        }
+    }
+    if usage == Usage::NONE {
+        usage = Usage::ALL;
+    }
+    db.set_usage(usage)?;
+    Ok(())
+}
+
+/// Parse pacman.conf-style SigLevel tokens into an alpm bitmask.
+///
+/// Matches pacman/src/pacman/conf.c::process_siglevel: each token can carry
+/// a `Package` or `Database` prefix scoping it; the bare verb (`Optional`,
+/// `Required`, `Never`, `TrustedOnly`, `TrustAll`) applies to both. Unknown
+/// tokens are silently ignored (mirrors pacman; warnings go to stderr there).
+fn parse_sig_level(levels: &[String]) -> SigLevel {
+    let mut sig = SigLevel::NONE;
+    for level in levels {
+        let (verb, package, database) = if let Some(v) = level.strip_prefix("Package") {
+            (v, true, false)
+        } else if let Some(v) = level.strip_prefix("Database") {
+            (v, false, true)
+        } else {
+            (level.as_str(), true, true)
+        };
+        match verb {
+            "Never" => {
+                if package {
+                    sig.remove(SigLevel::PACKAGE);
+                }
+                if database {
+                    sig.remove(SigLevel::DATABASE);
+                }
+            }
+            "Optional" => {
+                if package {
+                    sig.insert(SigLevel::PACKAGE | SigLevel::PACKAGE_OPTIONAL);
+                }
+                if database {
+                    sig.insert(SigLevel::DATABASE | SigLevel::DATABASE_OPTIONAL);
+                }
+            }
+            "Required" => {
+                if package {
+                    sig.insert(SigLevel::PACKAGE);
+                    sig.remove(SigLevel::PACKAGE_OPTIONAL);
+                }
+                if database {
+                    sig.insert(SigLevel::DATABASE);
+                    sig.remove(SigLevel::DATABASE_OPTIONAL);
+                }
+            }
+            "TrustedOnly" => {
+                if package {
+                    sig.remove(SigLevel::PACKAGE_MARGINAL_OK | SigLevel::PACKAGE_UNKNOWN_OK);
+                }
+                if database {
+                    sig.remove(SigLevel::DATABASE_MARGINAL_OK | SigLevel::DATABASE_UNKNOWN_OK);
+                }
+            }
+            "TrustAll" => {
+                if package {
+                    sig.insert(SigLevel::PACKAGE_MARGINAL_OK | SigLevel::PACKAGE_UNKNOWN_OK);
+                }
+                if database {
+                    sig.insert(SigLevel::DATABASE_MARGINAL_OK | SigLevel::DATABASE_UNKNOWN_OK);
+                }
+            }
+            _ => {}
+        }
+    }
+    sig
+}
+
+fn paths_to_strs(paths: &[PathBuf]) -> Vec<&str> {
+    paths.iter().filter_map(|p| p.to_str()).collect()
+}
+
+fn path_to_str(p: &Path) -> &str {
+    p.to_str().unwrap_or("")
 }

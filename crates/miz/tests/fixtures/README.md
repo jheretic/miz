@@ -12,7 +12,7 @@ tests/fixtures/
   README.md                       <- this file
   root/
     etc/
-      pacman.conf                 <- templated; see "Templating" below
+      miz.toml                    <- templated; see "Templating" below
     var/
       lib/pacman/
         local/.gitkeep            <- localdb (installed packages)
@@ -25,7 +25,7 @@ directories. The runtime helper does not copy them into the tempdir.
 
 ## Templating
 
-`tests/fixtures/root/etc/pacman.conf` contains placeholder tokens:
+`tests/fixtures/root/etc/miz.toml` contains placeholder tokens:
 
 | Token         | Replaced with                          |
 |---------------|----------------------------------------|
@@ -36,20 +36,16 @@ directories. The runtime helper does not copy them into the tempdir.
 | `@GPGDIR@`    | `<tempdir>/etc/pacman.d/gnupg/`        |
 
 `make_test_root()` (in `tests/common/mod.rs`) performs the substitution
-and writes the result into `<tempdir>/etc/pacman.conf`. Tests then run
-`miz --config <tempdir>/etc/pacman.conf --root <tempdir> ...`.
+and writes the result into `<tempdir>/etc/miz.toml`. Tests then run
+`miz --config <tempdir>/etc/miz.toml --root <tempdir> ...`.
 
 ## Host requirements
 
-`alpm_utils::config::Config::with_opts` parses pacman.conf by shelling
-out to `pacman-conf(8)`. On hosts where that binary is missing (Fedora,
-macOS, CI without an Arch base image), every test that calls
-`make_test_root()` will fail before reaching libalpm.
-
-For that reason **every test that uses this fixture is `#[ignore]`-gated**
-and only runs under `cargo test -- --ignored` on a host where
-`pacman-conf` and `libalpm.so.15` are both present. See the existing
-`MIZ_HAS_ALPM=1` gate convention in `tests/cli.rs` and friends.
+miz now parses miz.toml natively via `toml` + `serde`, so the fixture
+no longer requires `pacman-conf(8)` on PATH. Tests still require a
+working `libalpm.so` (>= 16) at runtime, which is what gates them
+#[ignore] on non-Arch hosts. See the `MIZ_HAS_ALPM=1` gate convention
+in `tests/cli.rs` and friends.
 
 ## libalpm localdb on-disk format
 

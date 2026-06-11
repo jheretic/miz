@@ -31,16 +31,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "alpm-utils"
-version = "5.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a59a6ffb120311a82dd5569a3bfa0098db8a1c1d8b5ec568e97b61cff3b10729"
-dependencies = [
- "alpm",
- "pacmanconf",
-]
-
-[[package]]
 name = "anstream"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -482,13 +472,13 @@ version = "0.1.0"
 dependencies = [
  "alpm",
  "alpm-sys",
- "alpm-utils",
  "assert_cmd",
  "clap",
  "clap_complete",
  "clap_mangen",
  "ctrlc",
  "indicatif",
+ "miz-config",
  "predicates",
  "regex",
  "serde",

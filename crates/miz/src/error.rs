@@ -4,8 +4,6 @@ use crate::exit;
 pub enum MizError {
     #[error("alpm: {0}")]
     Alpm(#[from] alpm::Error),
-    #[error("pacman.conf: {0}")]
-    Conf(#[from] alpm_utils::config::Error),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
     #[error("regex: {0}")]
@@ -31,8 +29,7 @@ impl MizError {
         match self {
             MizError::Alpm(_) => exit::ALPM,
             MizError::Deptest => exit::DEPTEST,
-            MizError::Conf(_)
-            | MizError::Io(_)
+            MizError::Io(_)
             | MizError::Regex(_)
             | MizError::PackageNotFound(_)
             | MizError::DatabaseErrors(_)

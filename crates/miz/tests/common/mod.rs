@@ -22,9 +22,9 @@ pub fn miz() -> Command {
 /// it constant makes `install_fake_pkg` byte-for-byte deterministic.
 const FAKE_TIMESTAMP: i64 = 1_700_000_000;
 
-/// Source of truth for the per-test pacman.conf. Substituted at runtime
+/// Source of truth for the per-test miz.toml. Substituted at runtime
 /// by [`make_test_root`].
-const PACMAN_CONF_TEMPLATE: &str = include_str!("../fixtures/root/etc/pacman.conf");
+const MIZ_TOML_TEMPLATE: &str = include_str!("../fixtures/root/etc/miz.toml");
 
 /// A throwaway pacman root suitable for `miz --root <path>`.
 ///
@@ -37,9 +37,9 @@ pub struct TestRoot {
 }
 
 impl TestRoot {
-    /// `<root>/etc/pacman.conf`. Pass to `miz --config`.
+    /// `<root>/etc/miz.toml`. Pass to `miz --config`.
     pub fn config_path(&self) -> PathBuf {
-        self.path.join("etc/pacman.conf")
+        self.path.join("etc/miz.toml")
     }
 
     /// `<root>/var/lib/pacman/`. Pass to `miz --dbpath` when needed.
@@ -62,9 +62,9 @@ impl TestRoot {
 
 /// Build a fresh tempdir mirroring `tests/fixtures/root/`.
 ///
-/// Empty directories are recreated; the pacman.conf template is
+/// Empty directories are recreated; the miz.toml template is
 /// rewritten with substituted absolute paths and written to
-/// `<root>/etc/pacman.conf`.
+/// `<root>/etc/miz.toml`.
 pub fn make_test_root() -> TestRoot {
     let tmp = TempDir::new().expect("tempdir");
     let root = tmp.path().to_path_buf();
@@ -80,8 +80,8 @@ pub fn make_test_root() -> TestRoot {
         fs::create_dir_all(root.join(sub)).expect("mkdir -p");
     }
 
-    let conf = render_pacman_conf(&root);
-    fs::write(root.join("etc/pacman.conf"), conf).expect("write pacman.conf");
+    let conf = render_miz_toml(&root);
+    fs::write(root.join("etc/miz.toml"), conf).expect("write miz.toml");
 
     // libalpm refuses to open a non-empty local DB without this marker.
     // ALPM_LOCAL_DB_VERSION = 9 in libalpm 16.x (alpm-sys-5.0.1 pacman/lib/libalpm/be_local.c:48).
@@ -94,12 +94,12 @@ pub fn make_test_root() -> TestRoot {
     }
 }
 
-fn render_pacman_conf(root: &Path) -> String {
+fn render_miz_toml(root: &Path) -> String {
     let dbpath = root.join("var/lib/pacman/");
     let cachedir = root.join("var/cache/pacman/pkg/");
     let logfile = root.join("var/log/pacman.log");
     let gpgdir = root.join("etc/pacman.d/gnupg/");
-    let mut s = String::from(PACMAN_CONF_TEMPLATE);
+    let mut s = String::from(MIZ_TOML_TEMPLATE);
     s = s.replace("@ROOTDIR@", &with_trailing_slash(root));
     s = s.replace("@DBPATH@", &path_string(&dbpath));
     s = s.replace("@CACHEDIR@", &path_string(&cachedir));
