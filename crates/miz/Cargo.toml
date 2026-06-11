@@ -14,6 +14,7 @@ clap_mangen   = "0.2"
 [dependencies]
 alpm               = "5"
 alpm-sys           = "5"
+libc               = "0.2"
 miz-config         = { path = "../miz-config" }
 ctrlc              = { version = "3", features = ["termination"] }
 clap               = { version = "4", features = ["derive", "wrap_help"] }

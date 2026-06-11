@@ -62,7 +62,8 @@ fn apply_config(alpm: &mut Alpm, conf: &MizConfig) -> Result<()> {
     alpm.set_logfile(path_to_str(&opts.log_file))?;
     alpm.set_ignorepkgs(opts.ignore_pkg.iter().map(String::as_str))?;
     alpm.set_ignoregroups(opts.ignore_group.iter().map(String::as_str))?;
-    alpm.set_architectures(opts.architecture.iter().map(String::as_str))?;
+    let architectures = resolve_architectures(&opts.architecture);
+    alpm.set_architectures(architectures.iter().map(String::as_str))?;
     alpm.set_noupgrades(opts.no_upgrade.iter().map(String::as_str))?;
     alpm.set_noextracts(opts.no_extract.iter().map(String::as_str))?;
     alpm.set_default_siglevel(parse_sig_level(&opts.sig_level))?;
@@ -180,6 +181,66 @@ fn paths_to_strs(paths: &[PathBuf]) -> Vec<&str> {
     paths.iter().filter_map(|p| p.to_str()).collect()
 }
 
+/// Expand `"auto"` entries to the running kernel's `uname -m` value,
+/// matching `pacman/src/pacman/conf.c::config_add_architecture`. Other
+/// tokens pass through unchanged. Falls back to leaving `"auto"` in
+/// place if the kernel call fails (libalpm will then reject it; the
+/// user sees a clear error rather than a silent arch mismatch).
+fn resolve_architectures(input: &[String]) -> Vec<String> {
+    let machine = uname_machine();
+    input
+        .iter()
+        .map(|a| match (a.as_str(), &machine) {
+            ("auto", Some(m)) => m.clone(),
+            _ => a.clone(),
+        })
+        .collect()
+}
+
+fn uname_machine() -> Option<String> {
+    // SAFETY: utsname is POD; uname(2) writes into the buffer and returns 0
+    // on success. We zero-init so a partial write still produces a valid
+    // C-string in `machine`.
+    let mut un: libc::utsname = unsafe { std::mem::zeroed() };
+    let rc = unsafe { libc::uname(&mut un) };
+    if rc != 0 {
+        return None;
+    }
+    let bytes: &[u8] = unsafe {
+        std::slice::from_raw_parts(un.machine.as_ptr() as *const u8, un.machine.len())
+    };
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    std::str::from_utf8(&bytes[..end]).ok().map(String::from)
+}
+
 fn path_to_str(p: &Path) -> &str {
     p.to_str().unwrap_or("")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uname_machine_returns_a_value_on_linux() {
+        let m = uname_machine().expect("uname(2) should succeed on a Linux host");
+        assert!(!m.is_empty(), "uname.machine should not be empty");
+    }
+
+    #[test]
+    fn resolve_architectures_substitutes_auto_per_token() {
+        let m = uname_machine().unwrap();
+        let out = resolve_architectures(&[
+            "auto".to_string(),
+            "x86_64".to_string(),
+            "auto".to_string(),
+        ]);
+        assert_eq!(out, vec![m.clone(), "x86_64".to_string(), m]);
+    }
+
+    #[test]
+    fn resolve_architectures_leaves_non_auto_alone() {
+        let out = resolve_architectures(&["x86_64".to_string(), "aarch64".to_string()]);
+        assert_eq!(out, vec!["x86_64".to_string(), "aarch64".to_string()]);
+    }
 }
