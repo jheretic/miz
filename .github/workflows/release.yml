@@ -1,0 +1,130 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (must already exist)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  binaries:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Install build deps
+        run: |
+          pacman -Syu --noconfirm --needed git rust pkgconf
+      - uses: actions/checkout@v4
+      - name: Resolve tag and version
+        id: meta
+        run: |
+          tag="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          version="${tag#v}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Cargo build (release)
+        run: cargo build --release --workspace
+      - name: Stage and strip binaries
+        run: |
+          mkdir -p staging/miz-${{ steps.meta.outputs.version }}-x86_64
+          cp target/release/miz target/release/miz-convert \
+             staging/miz-${{ steps.meta.outputs.version }}-x86_64/
+          strip staging/miz-${{ steps.meta.outputs.version }}-x86_64/miz \
+                staging/miz-${{ steps.meta.outputs.version }}-x86_64/miz-convert
+          cp LICENSE README.md \
+             staging/miz-${{ steps.meta.outputs.version }}-x86_64/
+      - name: Tarball
+        run: |
+          cd staging
+          tar czf miz-${{ steps.meta.outputs.version }}-x86_64.tar.gz \
+                  miz-${{ steps.meta.outputs.version }}-x86_64/
+          sha256sum miz-${{ steps.meta.outputs.version }}-x86_64.tar.gz \
+                  > miz-${{ steps.meta.outputs.version }}-x86_64.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: |
+            staging/miz-${{ steps.meta.outputs.version }}-x86_64.tar.gz
+            staging/miz-${{ steps.meta.outputs.version }}-x86_64.tar.gz.sha256
+
+  packages:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    needs: binaries
+    steps:
+      - name: Install build deps
+        run: |
+          pacman -Syu --noconfirm --needed git rust pkgconf sudo fakeroot
+      - uses: actions/checkout@v4
+      - name: Create builder user
+        # makepkg refuses to run as root. The container user is root, so we
+        # create an unprivileged user, give it passwordless sudo for pacman
+        # (-i installs runtime deps), and run makepkg as that user.
+        run: |
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder
+          chown -R builder:builder .
+      - name: Patch PKGBUILD pkgver and source URL
+        env:
+          VERSION: ${{ needs.binaries.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          # pkgver: match the actual release tag.
+          # source URL: use the current GitHub repo's auto-generated tarball.
+          # Local PKGBUILDs ship with a placeholder org name; the workflow
+          # rewrites them to match wherever the workflow is running so the
+          # release pipeline is org/fork-agnostic.
+          for pb in packaging/arch/miz/PKGBUILD packaging/arch/miz-convert/PKGBUILD; do
+            sed -i "s/^pkgver=.*/pkgver=$VERSION/" "$pb"
+            sed -i "s|https://github.com/[^/]*/miz/archive|https://github.com/$REPO/archive|g" "$pb"
+          done
+      - name: Build miz package
+        run: |
+          cd packaging/arch/miz
+          sudo -u builder makepkg --skipchecksums --nocheck --syncdeps --noconfirm
+      - name: Build miz-convert package
+        run: |
+          cd packaging/arch/miz-convert
+          sudo -u builder makepkg --skipchecksums --nocheck --syncdeps --noconfirm
+      - name: Collect packages
+        run: |
+          mkdir -p staging
+          cp packaging/arch/miz/*.pkg.tar.zst staging/
+          cp packaging/arch/miz-convert/*.pkg.tar.zst staging/
+          (cd staging && sha256sum *.pkg.tar.zst > sha256sums.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: |
+            staging/*.pkg.tar.zst
+            staging/sha256sums.txt
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [binaries, packages]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Flatten
+        run: |
+          mkdir -p upload
+          find artifacts -type f -exec cp {} upload/ \;
+          ls -la upload/
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: miz ${{ needs.binaries.outputs.version }}
+          files: upload/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true

@@ -4,13 +4,13 @@ pkgver=0.1.0
 pkgrel=1
 pkgdesc='Convert pacman.conf to miz.toml'
 arch=('x86_64')
-url='https://github.com/THRONELESS/miz'
+url='https://github.com/OWNER/miz'
 license=('GPL-2.0-or-later')
 depends=('pacman')   # pacman-conf binary at runtime; pacmanconf crate shells out
 makedepends=('cargo' 'pkgconf')
 
 # TODO: replace with the GitHub release tarball URL once v$pkgver is tagged.
-source=("miz-$pkgver.tar.gz::https://github.com/THRONELESS/miz/archive/refs/tags/v$pkgver.tar.gz")
+source=("miz-$pkgver.tar.gz::https://github.com/OWNER/miz/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('SKIP')
 
 prepare() {

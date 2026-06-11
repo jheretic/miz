@@ -4,7 +4,7 @@ pkgver=0.1.0
 pkgrel=1
 pkgdesc='Package and update manager for the Archetype Linux distribution'
 arch=('x86_64')
-url='https://github.com/THRONELESS/miz'
+url='https://github.com/OWNER/miz'
 license=('GPL-2.0-or-later')
 depends=('pacman' 'gpgme')
 makedepends=('cargo' 'pkgconf')
@@ -13,7 +13,7 @@ makedepends=('cargo' 'pkgconf')
 # Until then, build locally via:
 #   makepkg --noextract  (uses the current source/ checkout)
 # or override source=() on the makepkg command line.
-source=("$pkgname-$pkgver.tar.gz::https://github.com/THRONELESS/miz/archive/refs/tags/v$pkgver.tar.gz")
+source=("$pkgname-$pkgver.tar.gz::https://github.com/OWNER/miz/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('SKIP')
 
 prepare() {

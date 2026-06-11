@@ -44,7 +44,9 @@ cd packaging/arch/miz-convert && makepkg -si
 ### Status
 
 These PKGBUILDs are not yet submitted to the AUR. The `source=()` URL
-assumes a tagged release at `github.com/THRONELESS/miz/archive/refs/tags/`;
-the maintainer line and URL placeholder need updating before submission.
-`sha256sums=('SKIP')` is fine for local builds but must be replaced
-with the real sha256 of the release tarball before AUR upload.
+uses `github.com/OWNER/miz` as a placeholder; replace `OWNER` with the
+actual GitHub org before submission, or rely on the release workflow
+(`.github/workflows/release.yml`) which rewrites the URL automatically
+from `${{ github.repository }}`. `sha256sums=('SKIP')` is fine for
+local builds but must be replaced with the real sha256 of the release
+tarball before AUR upload.
