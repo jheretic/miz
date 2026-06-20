@@ -19,6 +19,10 @@ pub enum MizError {
     PackageNotFound(String),
     #[error("not implemented")]
     NotImplemented,
+    #[error("sysupdate: {0}")]
+    Sysupdate(String),
+    #[error("dbus: {0}")]
+    Dbus(#[from] zbus::Error),
     #[error("dependency check failed")]
     Deptest,
     #[error("{0} database error(s) found")]
@@ -42,6 +46,8 @@ impl MizError {
             | MizError::PackageNotFound(_)
             | MizError::DatabaseErrors(_)
             | MizError::NotImplemented
+            | MizError::Sysupdate(_)
+            | MizError::Dbus(_)
             | MizError::BadArgs(_)
             | MizError::Other(_) => exit::GENERIC,
         }

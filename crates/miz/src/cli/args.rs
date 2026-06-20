@@ -245,6 +245,50 @@ pub mod files {
 pub mod images {
     #[derive(clap::Args)]
     pub struct Args {
+        /// List available versions for a component (like -Sl)
+        #[arg(short = 'l', long)]
+        pub list: bool,
+        /// Show component/version info (-ii for changelog/contents)
+        #[arg(short = 'i', long, action = clap::ArgAction::Count)]
+        pub info: u8,
+        /// Check for a newer version without downloading
+        #[arg(short = 'y', long = "check-new")]
+        pub check_new: bool,
+        /// Update to the newest (or pinned) version
+        #[arg(short = 'u', long, action = clap::ArgAction::Count)]
+        pub upgrade: u8,
+        /// Remove obsolete downloaded versions (vacuum)
+        #[arg(short = 'c', long, action = clap::ArgAction::Count)]
+        pub clean: u8,
+        /// Report whether an update is staged/pending
+        #[arg(short = 'p', long)]
+        pub pending: bool,
+        /// Reboot into the updated image (also usable as a modifier on -Iu).
+        /// Long-only: -b is the global --dbpath short flag.
+        #[arg(long)]
+        pub reboot: bool,
+        /// List components (like package groups)
+        #[arg(short = 'g', long)]
+        pub components: bool,
+        /// Manage optional features
+        #[arg(short = 'f', long)]
+        pub features: bool,
+        /// Operate on installed versions only (no network)
+        #[arg(long)]
+        pub offline: bool,
+        /// Suppress markers / extra detail
+        #[arg(short = 'q', long)]
+        pub quiet: bool,
+        /// Do not ask for confirmation
+        #[arg(long)]
+        pub noconfirm: bool,
+        /// Suppress the progress bar
+        #[arg(long)]
+        pub noprogressbar: bool,
+        /// Print raw Describe JSON instead of pacman-style rendering
+        #[arg(long, value_name = "MODE")]
+        pub json: Option<String>,
+        /// Component, or component/version
         pub targets: Vec<String>,
     }
 }
