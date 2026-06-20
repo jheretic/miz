@@ -63,7 +63,7 @@ where
         }
         match rx.recv_timeout(Duration::from_millis(200)) {
             Ok((rid, status)) if rid == id => break status,
-            Ok(_) => continue,            // some other job finished
+            Ok(_) => continue, // some other job finished
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 // Signal thread ended before our job's JobRemoved arrived. The

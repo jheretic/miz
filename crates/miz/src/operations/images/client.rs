@@ -150,13 +150,17 @@ mod tests {
         assert!(is_auth_denial(
             "org.freedesktop.DBus.Error.InteractiveAuthorizationRequired"
         ));
-        assert!(is_auth_denial("org.freedesktop.PolicyKit1.Error.NotAuthorized"));
+        assert!(is_auth_denial(
+            "org.freedesktop.PolicyKit1.Error.NotAuthorized"
+        ));
     }
 
     #[test]
     fn non_auth_errors_do_not_match() {
         assert!(!is_auth_denial("org.freedesktop.DBus.Error.UnknownMethod"));
-        assert!(!is_auth_denial("org.freedesktop.sysupdate1.Error.NoSuchTarget"));
+        assert!(!is_auth_denial(
+            "org.freedesktop.sysupdate1.Error.NoSuchTarget"
+        ));
         assert!(!is_auth_denial(""));
     }
 }

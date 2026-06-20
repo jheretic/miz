@@ -244,24 +244,54 @@ fn images_pending(args: &Args) -> Result<()> {
     let (component, _version) = split_component(args.targets.first().map(String::as_str));
     let (name, proxy) = resolve_target(&conn, &targets, component)?;
 
-    let current = proxy.get_version().unwrap_or_default();
-    let current_label = if current.is_empty() { "(none)" } else { &current };
-    let newest = proxy.check_new()?;
-
-    if newest.is_empty() || newest == current {
-        // Status note to stderr, matching -Iy's "no newer version" note.
-        if !args.quiet {
-            eprintln!("{name}: up to date ({current_label})");
-        }
-        return Ok(());
-    }
-
-    if args.quiet {
-        println!("{newest}");
+    // systemd `pending`: is the newest INSTALLED version newer than the BOOTED
+    // one (IMAGE_VERSION in os-release), i.e. is a reboot due? This is distinct
+    // from -Iy/check-new ("is a download available"). GetVersion is the newest
+    // installed; booted comes from os-release under --root.
+    let installed = proxy.get_version().unwrap_or_default();
+    let booted = booted_image_version(&args.targets);
+    let installed_label = if installed.is_empty() {
+        "(none)"
     } else {
-        println!("{name}: update pending {current_label} -> {newest}");
+        &installed
+    };
+    let booted_label = match &booted {
+        Some(b) if !b.is_empty() => b.as_str(),
+        _ => "(unknown)",
+    };
+
+    let reboot_due = match &booted {
+        Some(b) => !installed.is_empty() && &installed != b,
+        None => false,
+    };
+
+    if reboot_due {
+        if args.quiet {
+            println!("{installed}");
+        } else {
+            println!("{name}: reboot pending: booted {booted_label}, installed {installed_label}");
+        }
+    } else if !args.quiet {
+        // No reboot due -> status note to stderr, matching -Iy's note stream.
+        eprintln!("{name}: no reboot pending (booted {booted_label})");
     }
     Ok(())
+}
+
+/// Read `IMAGE_VERSION=` from `<root>/etc/os-release` (honoring a `--root`-style
+/// component path is not relevant here; sysupdate's host target is rooted at /).
+/// Returns None if the file or key is absent. Only the host target has a
+/// meaningful booted version; for other components this is best-effort.
+fn booted_image_version(_targets: &[String]) -> Option<String> {
+    let text = std::fs::read_to_string("/etc/os-release")
+        .or_else(|_| std::fs::read_to_string("/usr/lib/os-release"))
+        .ok()?;
+    for line in text.lines() {
+        if let Some(v) = line.strip_prefix("IMAGE_VERSION=") {
+            return Some(v.trim().trim_matches('"').to_string());
+        }
+    }
+    None
 }
 
 fn images_features(args: &Args) -> Result<()> {
@@ -272,14 +302,18 @@ fn images_features(args: &Args) -> Result<()> {
     // Enable/disable mutate config (manage-features polkit action, admin auth).
     // enabled: >0 enable, 0 disable (man page). flags must be 0.
     if let Some(feature) = &args.enable {
-        proxy.set_feature_enabled(feature, 1, 0).map_err(map_call_error)?;
+        proxy
+            .set_feature_enabled(feature, 1, 0)
+            .map_err(map_call_error)?;
         if !args.quiet {
             println!("{name}: enabled feature {feature} (run -Iu to apply)");
         }
         return Ok(());
     }
     if let Some(feature) = &args.disable {
-        proxy.set_feature_enabled(feature, 0, 0).map_err(map_call_error)?;
+        proxy
+            .set_feature_enabled(feature, 0, 0)
+            .map_err(map_call_error)?;
         if !args.quiet {
             println!("{name}: disabled feature {feature} (run -Iu to apply)");
         }
@@ -316,8 +350,7 @@ fn images_appstream(args: &Args) -> Result<()> {
     // With a target, query that component's catalogs; bare -> all known URLs.
     let urls = match args.targets.first() {
         Some(_) => {
-            let (component, _version) =
-                split_component(args.targets.first().map(String::as_str));
+            let (component, _version) = split_component(args.targets.first().map(String::as_str));
             let (_name, proxy) = resolve_target(&conn, &targets, component)?;
             proxy.get_app_stream()?
         }
@@ -435,7 +468,10 @@ mod tests {
         assert!(matches!(json_mode(None).unwrap(), JsonMode::Off));
         assert!(matches!(json_mode(Some("off")).unwrap(), JsonMode::Off));
         assert!(matches!(json_mode(Some("short")).unwrap(), JsonMode::Short));
-        assert!(matches!(json_mode(Some("pretty")).unwrap(), JsonMode::Pretty));
+        assert!(matches!(
+            json_mode(Some("pretty")).unwrap(),
+            JsonMode::Pretty
+        ));
         assert!(json_mode(Some("bogus")).is_err());
     }
 }

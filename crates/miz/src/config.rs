@@ -206,9 +206,8 @@ fn uname_machine() -> Option<String> {
     if rc != 0 {
         return None;
     }
-    let bytes: &[u8] = unsafe {
-        std::slice::from_raw_parts(un.machine.as_ptr() as *const u8, un.machine.len())
-    };
+    let bytes: &[u8] =
+        unsafe { std::slice::from_raw_parts(un.machine.as_ptr() as *const u8, un.machine.len()) };
     let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
     std::str::from_utf8(&bytes[..end]).ok().map(String::from)
 }
@@ -230,11 +229,8 @@ mod tests {
     #[test]
     fn resolve_architectures_substitutes_auto_per_token() {
         let m = uname_machine().unwrap();
-        let out = resolve_architectures(&[
-            "auto".to_string(),
-            "x86_64".to_string(),
-            "auto".to_string(),
-        ]);
+        let out =
+            resolve_architectures(&["auto".to_string(), "x86_64".to_string(), "auto".to_string()]);
         assert_eq!(out, vec![m.clone(), "x86_64".to_string(), m]);
     }
 
