@@ -111,24 +111,51 @@ pub fn system_connection() -> Result<zbus::blocking::Connection> {
         .map_err(|e| MizError::Sysupdate(format!("cannot connect to the system D-Bus: {e}")))
 }
 
+/// True if a D-Bus error name is a polkit/auth denial. Split out from
+/// `map_call_error` so it is unit-testable without fabricating a `zbus::Error`.
+pub fn is_auth_denial(name: &str) -> bool {
+    matches!(
+        name,
+        "org.freedesktop.DBus.Error.AccessDenied"
+            | "org.freedesktop.DBus.Error.InteractiveAuthorizationRequired"
+            | "org.freedesktop.PolicyKit1.Error.NotAuthorized"
+    )
+}
+
 /// Map a zbus error from a privileged call (Acquire/Install/Vacuum/Reboot) to a
 /// clean message when it is a polkit/auth denial, else pass it through as
 /// `MizError::Dbus`. Matches on the D-Bus error NAME, never the message text.
 pub fn map_call_error(e: zbus::Error) -> MizError {
     if let zbus::Error::MethodError(name, _, _) = &e {
-        match name.as_str() {
-            "org.freedesktop.DBus.Error.AccessDenied"
-            | "org.freedesktop.DBus.Error.InteractiveAuthorizationRequired"
-            | "org.freedesktop.PolicyKit1.Error.NotAuthorized" => {
-                return MizError::Sysupdate(
-                    "this operation requires elevated privileges (run as root or via polkit)"
-                        .to_string(),
-                );
-            }
-            _ => {}
+        if is_auth_denial(name.as_str()) {
+            return MizError::Sysupdate(
+                "this operation requires elevated privileges (run as root or via polkit)"
+                    .to_string(),
+            );
         }
     }
     MizError::Dbus(e)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_auth_denial;
+
+    #[test]
+    fn auth_denials_match() {
+        assert!(is_auth_denial("org.freedesktop.DBus.Error.AccessDenied"));
+        assert!(is_auth_denial(
+            "org.freedesktop.DBus.Error.InteractiveAuthorizationRequired"
+        ));
+        assert!(is_auth_denial("org.freedesktop.PolicyKit1.Error.NotAuthorized"));
+    }
+
+    #[test]
+    fn non_auth_errors_do_not_match() {
+        assert!(!is_auth_denial("org.freedesktop.DBus.Error.UnknownMethod"));
+        assert!(!is_auth_denial("org.freedesktop.sysupdate1.Error.NoSuchTarget"));
+        assert!(!is_auth_denial(""));
+    }
 }
 
 /// Login1 manager, for `--reboot`. Reboot routes through logind (polkit-gated,

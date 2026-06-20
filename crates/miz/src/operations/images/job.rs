@@ -66,8 +66,16 @@ where
             Ok(_) => continue,            // some other job finished
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                // Signal thread ended without our id: treat as completed-unknown.
-                break 0;
+                // Signal thread ended before our job's JobRemoved arrived. The
+                // outcome is unknown; for an OS-mutating op, surface that rather
+                // than assuming success.
+                let _ = handle.join();
+                if let Some(b) = bar {
+                    b.finish_and_clear();
+                }
+                return Err(MizError::Sysupdate(format!(
+                    "lost track of update job {id} before completion (no JobRemoved signal)"
+                )));
             }
         }
     };

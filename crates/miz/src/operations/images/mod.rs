@@ -230,6 +230,8 @@ fn images_upgrade(args: &Args) -> Result<()> {
     let (name, proxy) = resolve_target(&conn, &targets, component)?;
     // "" lets sysupdate pick newest; a pinned version uses the
     // update-to-version polkit action (admin auth).
+    // TODO(phase3/live): confirm against a real systemd 257+ host that ""
+    // selects newest for Acquire (same unverified assumption as -Ii's Describe).
     let version = version.unwrap_or("");
 
     // Subscribe to JobRemoved BEFORE Acquire so a fast job can't finish in the
@@ -278,9 +280,11 @@ fn images_vacuum(args: &Args) -> Result<()> {
     Ok(())
 }
 
-fn images_reboot(args: &Args) -> Result<()> {
-    let (conn, _targets) = connect()?;
-    let _ = args;
+fn images_reboot(_args: &Args) -> Result<()> {
+    // Reboot only needs logind, NOT sysupdated — don't run connect()'s
+    // ListTargets probe, or `--reboot` would wrongly require systemd 257+
+    // on a host that has logind but no sysupdated.
+    let conn = client::system_connection()?;
     do_reboot(&conn)
 }
 
