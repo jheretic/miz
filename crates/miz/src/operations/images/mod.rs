@@ -3,8 +3,9 @@
 //! verbs last — deliberately NOT a mirror of `sync::run`, which checks clean
 //! first). Context-less (no alpm handle).
 //!
-//! All verbs are wired: read-only (-Il/-Ii/-Iy/-Ig/-Ip) and mutating
-//! (-Iu/-Ic/--reboot).
+//! All verbs are wired: read-only (-Il/-Ii/-Iy/-Ig/-Ip), mutating
+//! (-Iu/-Ic/--reboot), and feature/appstream polish (-If/--enable/--disable,
+//! --appstream).
 
 mod client;
 pub(crate) mod describe;
@@ -39,7 +40,10 @@ pub fn run(args: Args) -> Result<()> {
     if args.pending {
         return images_pending(&args);
     }
-    if args.features {
+    if args.appstream {
+        return images_appstream(&args);
+    }
+    if args.features || args.enable.is_some() || args.disable.is_some() {
         return images_features(&args);
     }
     if args.upgrade > 0 {
@@ -109,6 +113,45 @@ fn list_flags(offline: bool) -> u64 {
     }
 }
 
+/// `--json=MODE` outcome for the Describe/DescribeFeature passthrough.
+/// Mirrors systemd-sysupdate's `--json=` (short/pretty/off).
+enum JsonMode {
+    Off,
+    Short,
+    Pretty,
+}
+
+/// Parse `--json=MODE`. Absent or `off` -> Off (pacman rendering). `short`
+/// (default when given without an explicit accepted value isn't possible,
+/// clap requires a value) -> raw bytes. `pretty` -> re-indented.
+fn json_mode(arg: Option<&str>) -> Result<JsonMode> {
+    match arg {
+        None | Some("off") => Ok(JsonMode::Off),
+        Some("short") => Ok(JsonMode::Short),
+        Some("pretty") => Ok(JsonMode::Pretty),
+        Some(other) => Err(MizError::Sysupdate(format!(
+            "invalid --json mode: {other} (expected short, pretty, or off)"
+        ))),
+    }
+}
+
+/// Print `json` per `mode` (caller already excluded Off). Short prints the raw
+/// bytes as received; Pretty re-serializes via serde_json. A malformed payload
+/// under Pretty falls back to raw so the user still sees something.
+fn print_json(json: &str, mode: JsonMode) {
+    match mode {
+        JsonMode::Off => unreachable!("caller handles Off before rendering"),
+        JsonMode::Short => println!("{json}"),
+        JsonMode::Pretty => match serde_json::from_str::<serde_json::Value>(json) {
+            Ok(v) => println!(
+                "{}",
+                serde_json::to_string_pretty(&v).unwrap_or_else(|_| json.to_string())
+            ),
+            Err(_) => println!("{json}"),
+        },
+    }
+}
+
 fn images_list(args: &Args) -> Result<()> {
     let (conn, targets) = connect()?;
     let (component, _version) = split_component(args.targets.first().map(String::as_str));
@@ -152,10 +195,11 @@ fn images_info(args: &Args) -> Result<()> {
     let version = version.unwrap_or("");
     let json = proxy.describe(version, flags)?;
 
-    // --json is a raw passthrough: dump the bytes the user asked for BEFORE
-    // any parse, so a malformed payload still prints rather than erroring.
-    if args.json.is_some() {
-        println!("{json}");
+    // --json=short/pretty is a passthrough: emit the payload BEFORE any parse,
+    // so a malformed body still prints rather than erroring. =off falls through.
+    let mode = json_mode(args.json.as_deref())?;
+    if !matches!(mode, JsonMode::Off) {
+        print_json(&json, mode);
         return Ok(());
     }
 
@@ -220,8 +264,72 @@ fn images_pending(args: &Args) -> Result<()> {
     Ok(())
 }
 
-fn images_features(_args: &Args) -> Result<()> {
-    Err(MizError::NotImplemented)
+fn images_features(args: &Args) -> Result<()> {
+    let (conn, targets) = connect()?;
+    let (component, _version) = split_component(args.targets.first().map(String::as_str));
+    let (name, proxy) = resolve_target(&conn, &targets, component)?;
+
+    // Enable/disable mutate config (manage-features polkit action, admin auth).
+    // enabled: >0 enable, 0 disable (man page). flags must be 0.
+    if let Some(feature) = &args.enable {
+        proxy.set_feature_enabled(feature, 1, 0).map_err(map_call_error)?;
+        if !args.quiet {
+            println!("{name}: enabled feature {feature} (run -Iu to apply)");
+        }
+        return Ok(());
+    }
+    if let Some(feature) = &args.disable {
+        proxy.set_feature_enabled(feature, 0, 0).map_err(map_call_error)?;
+        if !args.quiet {
+            println!("{name}: disabled feature {feature} (run -Iu to apply)");
+        }
+        return Ok(());
+    }
+
+    // component/<feature> -> describe that feature; bare component -> list.
+    match split_component(args.targets.first().map(String::as_str)).1 {
+        Some(feature) => {
+            let json = proxy.describe_feature(feature, 0)?;
+            // --json passthrough before any parse (mirrors -Ii).
+            let mode = json_mode(args.json.as_deref())?;
+            if !matches!(mode, JsonMode::Off) {
+                print_json(&json, mode);
+                return Ok(());
+            }
+            let f = describe::Feature::parse(&json).map_err(|e| {
+                MizError::Sysupdate(format!("could not parse DescribeFeature JSON: {e}"))
+            })?;
+            print!("{}", format::feature_block(feature, &f));
+            println!();
+        }
+        None => {
+            for feature in proxy.list_features(0)? {
+                println!("{feature}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn images_appstream(args: &Args) -> Result<()> {
+    let (conn, targets) = connect()?;
+    // With a target, query that component's catalogs; bare -> all known URLs.
+    let urls = match args.targets.first() {
+        Some(_) => {
+            let (component, _version) =
+                split_component(args.targets.first().map(String::as_str));
+            let (_name, proxy) = resolve_target(&conn, &targets, component)?;
+            proxy.get_app_stream()?
+        }
+        None => {
+            let manager = ManagerProxyBlocking::new(&conn)?;
+            manager.list_app_stream()?
+        }
+    };
+    for url in urls {
+        println!("{url}");
+    }
+    Ok(())
 }
 
 fn images_upgrade(args: &Args) -> Result<()> {
@@ -319,5 +427,15 @@ mod tests {
     #[test]
     fn split_component_version() {
         assert_eq!(split_component(Some("host/2.3")), ("host", Some("2.3")));
+    }
+
+    #[test]
+    fn json_mode_parsing() {
+        use super::{json_mode, JsonMode};
+        assert!(matches!(json_mode(None).unwrap(), JsonMode::Off));
+        assert!(matches!(json_mode(Some("off")).unwrap(), JsonMode::Off));
+        assert!(matches!(json_mode(Some("short")).unwrap(), JsonMode::Short));
+        assert!(matches!(json_mode(Some("pretty")).unwrap(), JsonMode::Pretty));
+        assert!(json_mode(Some("bogus")).is_err());
     }
 }

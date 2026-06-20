@@ -60,6 +60,9 @@ pub trait Target {
     /// `GetVersion() -> s` — currently installed version.
     fn get_version(&self) -> zbus::Result<String>;
 
+    /// `GetAppStream() -> as` — appstream catalog URLs for this target.
+    fn get_app_stream(&self) -> zbus::Result<Vec<String>>;
+
     /// `ListFeatures(t flags) -> as`.
     fn list_features(&self, flags: u64) -> zbus::Result<Vec<String>>;
 

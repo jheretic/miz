@@ -3,7 +3,7 @@
 //! formatters in `query.rs` (`format_size`/`format_date`) rather than
 //! duplicating them.
 
-use super::describe::Describe;
+use super::describe::{Describe, Feature};
 use crate::operations::query::{format_date, format_size};
 
 /// One `-Il` row. Mirrors `sync::sync_list`'s `{repo} {pkg} {ver}{suffix}`:
@@ -68,6 +68,29 @@ pub fn info_block(component: &str, d: &Describe, verbose: bool) -> String {
     out
 }
 
+/// `-If component/<feature>` block, same `{:<19}: {}` label idiom as `-Ii`.
+pub fn feature_block(id: &str, f: &Feature) -> String {
+    let mut out = String::new();
+    let mut label = |k: &str, v: &str| out.push_str(&format!("{:<19}: {}\n", k, v));
+
+    label("Feature", id);
+    label("Name", f.name.as_deref().unwrap_or("None"));
+    label("Enabled", yesno(f.enabled));
+    if let Some(d) = f.description.as_deref() {
+        label("Description", d);
+    }
+    if let Some(u) = f.documentation_url.as_deref() {
+        label("Documentation", u);
+    }
+    if let Some(u) = f.appstream_url.as_deref() {
+        label("AppStream", u);
+    }
+    if let Some(t) = f.transfers.as_ref() {
+        label("Transfers", &value_to_text(t));
+    }
+    out
+}
+
 /// One `-Ig` row: `class name` per `Manager.ListTargets` entry.
 pub fn component_line(class: &str, name: &str, quiet: bool) -> String {
     if quiet {
@@ -104,7 +127,7 @@ fn value_to_text(v: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::operations::images::describe::Describe;
+    use crate::operations::images::describe::{Describe, Feature};
 
     #[test]
     fn list_line_markers() {
@@ -168,6 +191,31 @@ Incomplete         : No
         let got = info_block("host", &d, true);
         assert!(got.contains("Changelog          : fixes"));
         assert!(got.contains("Contents           : a, b"));
+    }
+
+    #[test]
+    fn feature_block_golden() {
+        let f = Feature::parse(
+            r#"{"name":"experimental","enabled":true,"description":"edge","documentationUrl":"https://d"}"#,
+        )
+        .unwrap();
+        let got = feature_block("experimental", &f);
+        let expected = "\
+Feature            : experimental
+Name               : experimental
+Enabled            : Yes
+Description        : edge
+Documentation      : https://d
+";
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn feature_block_minimal() {
+        let f = Feature::parse(r#"{"name":"x"}"#).unwrap();
+        let got = feature_block("x", &f);
+        assert!(got.contains("Enabled            : Unknown"));
+        assert!(!got.contains("Description"));
     }
 
     #[test]

@@ -36,6 +36,31 @@ pub struct Describe {
     pub extra: Map<String, Value>,
 }
 
+/// Deserialization for `Target.DescribeFeature` JSON. Documented keys (systemd
+/// 261): name/description/enabled/documentationUrl/appstreamUrl/transfers. Same
+/// defensive shape as `Describe`: every key optional, unknowns flattened.
+#[derive(Debug, Default, Deserialize)]
+pub struct Feature {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default, rename = "documentationUrl")]
+    pub documentation_url: Option<String>,
+    #[serde(default, rename = "appstreamUrl")]
+    pub appstream_url: Option<String>,
+    #[serde(default)]
+    pub transfers: Option<Value>,
+}
+
+impl Feature {
+    pub fn parse(json: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(json)
+    }
+}
+
 impl Describe {
     pub fn parse(json: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(json)
@@ -103,5 +128,31 @@ mod tests {
         let d = Describe::parse("{}").unwrap();
         assert!(d.version.is_none());
         assert!(d.extra.is_empty());
+    }
+
+    #[test]
+    fn feature_parses_documented_keys() {
+        let json = r#"{
+            "name": "experimental",
+            "description": "bleeding edge",
+            "enabled": true,
+            "documentationUrl": "https://example/doc",
+            "appstreamUrl": "https://example/as.xml",
+            "transfers": ["a.transfer", "b.transfer"]
+        }"#;
+        let f = Feature::parse(json).unwrap();
+        assert_eq!(f.name.as_deref(), Some("experimental"));
+        assert_eq!(f.enabled, Some(true));
+        assert_eq!(f.documentation_url.as_deref(), Some("https://example/doc"));
+        assert_eq!(f.appstream_url.as_deref(), Some("https://example/as.xml"));
+        assert!(f.transfers.is_some());
+    }
+
+    #[test]
+    fn feature_missing_and_unknown_keys() {
+        let f = Feature::parse(r#"{"name": "x", "futureKey": 1}"#).unwrap();
+        assert_eq!(f.name.as_deref(), Some("x"));
+        assert_eq!(f.enabled, None);
+        assert!(f.description.is_none());
     }
 }

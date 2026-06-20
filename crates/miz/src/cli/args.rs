@@ -273,6 +273,15 @@ pub mod images {
         /// Manage optional features
         #[arg(short = 'f', long)]
         pub features: bool,
+        /// Enable an optional feature (with -If)
+        #[arg(long, value_name = "FEATURE", conflicts_with = "disable")]
+        pub enable: Option<String>,
+        /// Disable an optional feature (with -If)
+        #[arg(long, value_name = "FEATURE")]
+        pub disable: Option<String>,
+        /// List appstream catalog URLs (all, or a component's with -Ig-style target)
+        #[arg(long)]
+        pub appstream: bool,
         /// Operate on installed versions only (no network)
         #[arg(long)]
         pub offline: bool,
@@ -285,7 +294,7 @@ pub mod images {
         /// Suppress the progress bar
         #[arg(long)]
         pub noprogressbar: bool,
-        /// Print raw Describe JSON instead of pacman-style rendering
+        /// Print raw Describe JSON instead of pacman rendering (short|pretty|off)
         #[arg(long, value_name = "MODE")]
         pub json: Option<String>,
         /// Component, or component/version

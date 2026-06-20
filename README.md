@@ -16,7 +16,7 @@ A clone of Arch Linux's `pacman` built on the `alpm` crate. Same operations, sam
 | `-U` | `--upgrade` | Install local `.pkg.tar.zst` files |
 | `-F` | `--files` | Query the files database (`-Fy` refresh, `-Fl`, `-Fs`, `-Fx`) |
 | `-V` | `--version` | Print version banner |
-| `-I` | `--images` | **miz extension** — Archetype system images (stub) |
+| `-I` | `--images` | **miz extension** — Archetype system images via systemd-sysupdated (`-Il`/`-Ii`/`-Iy`/`-Iu`/`-Ic`/`-Ip`/`-Ig`/`-If`/`--reboot`/`--appstream`) |
 
 Plus a hidden `completions <shell>` subcommand for `clap_complete`-generated shell completions.
 
@@ -32,6 +32,11 @@ miz -F /usr/bin/python                # which package owns this file
 miz -R --recursive vim                # remove vim and unneeded deps
 miz -U ./my-pkg-1.0-1-any.pkg.tar.zst # install a local file
 miz -Sc                               # clean uninstalled cached packages
+miz -Il host                          # list available image versions
+miz -Iu host                          # update host image to newest
+miz -If host                          # list optional image features
+miz -If host/myfeature                # describe one feature
+miz -If --enable myfeature            # enable an optional feature
 ```
 
 ## Building
