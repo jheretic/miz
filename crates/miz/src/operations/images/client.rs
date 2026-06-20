@@ -46,18 +46,16 @@ pub trait Target {
     /// `CheckNew() -> s` — newest available version, "" if none.
     fn check_new(&self) -> zbus::Result<String>;
 
-    // NOTE (phase 3): Acquire/Install return a Job object path. The exact
-    // input signature is not pinned in PLAN §verified-surface beyond "-> o";
-    // these are best-guess (version + flags) and MUST be confirmed against the
-    // live service before wiring -Iu. Unused in phase 1.
-    /// `Acquire(s version, t flags) -> o` (job path).
-    fn acquire(&self, version: &str, flags: u64) -> zbus::Result<OwnedObjectPath>;
+    /// `Acquire(in s new_version, in t flags) -> (s new_version, t job_id, o job_path)`.
+    /// Per the systemd 261 man page the reply is a 3-tuple, not a bare path.
+    /// Wired in phase 3; verify against a live service then.
+    fn acquire(&self, version: &str, flags: u64) -> zbus::Result<(String, u64, OwnedObjectPath)>;
 
-    /// `Install(s version, t flags) -> o` (job path).
-    fn install(&self, version: &str, flags: u64) -> zbus::Result<OwnedObjectPath>;
+    /// `Install(in s new_version, in t flags) -> (s new_version, t job_id, o job_path)`.
+    fn install(&self, version: &str, flags: u64) -> zbus::Result<(String, u64, OwnedObjectPath)>;
 
-    /// `Vacuum() -> u` — count of removed versions.
-    fn vacuum(&self) -> zbus::Result<u32>;
+    /// `Vacuum() -> (u instances, u disabled_transfers)`.
+    fn vacuum(&self) -> zbus::Result<(u32, u32)>;
 
     /// `GetVersion() -> s` — currently installed version.
     fn get_version(&self) -> zbus::Result<String>;
@@ -104,12 +102,11 @@ pub trait Job {
 /// `SD_SYSUPDATE_OFFLINE` flag for `List`/`Describe` (installed-only, no network).
 pub const FLAG_OFFLINE: u64 = 1 << 0;
 
-/// Open the system bus, mapping any failure to a clean `Sysupdate` error rather
-/// than a raw zbus panic/trace.
+/// Open the system bus. This only fails if the bus itself is unreachable; the
+/// "sysupdated not running / too-old systemd" case surfaces at first method
+/// call instead. Phase 2 probes service availability (e.g. ListTargets) and
+/// maps THAT to the "requires systemd 257+" message.
 pub fn system_connection() -> Result<zbus::blocking::Connection> {
-    zbus::blocking::Connection::system().map_err(|_| {
-        MizError::Sysupdate(
-            "systemd-sysupdated is not available (requires systemd 257+)".to_string(),
-        )
-    })
+    zbus::blocking::Connection::system()
+        .map_err(|e| MizError::Sysupdate(format!("cannot connect to the system D-Bus: {e}")))
 }

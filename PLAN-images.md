@@ -60,9 +60,13 @@ Service `org.freedesktop.sysupdate1`, **system bus**.
   `Describe(s version, t flags) -> s` (JSON: version, newest, available,
   installed, obsolete, incomplete, changelog, contents...);
   `CheckNew() -> s` (newest available, "" if none; polkit: no auth);
-  `Acquire(...)`/`Install(...)` -> Job path (polkit: `update` no-auth when no
-  version; `update-to-version` **admin auth** when a version is named);
-  `Vacuum() -> u` (count deleted; polkit: **admin auth**);
+  `Acquire(in s new_version, in t flags) -> (s new_version, t job_id, o job_path)`
+  / `Install(...)` same shape (polkit: `update` no-auth when no version;
+  `update-to-version` **admin auth** when a version is named) — the reply is a
+  3-tuple, NOT a bare path (corrected after phase-1 review cross-checked the
+  systemd 261 man page);
+  `Vacuum() -> (u instances, u disabled_transfers)` (polkit: **admin auth**)
+  — two return values, not one;
   `GetVersion() -> s`; `GetAppStream()`, `ListFeatures()`, `DescribeFeature()`,
   `SetFeatureEnabled()`; props `Class`, `Name`, `Path`.
 - Job iface `...Job`: props `Id`(t), `Type`(list/describe/check-new/acquire/

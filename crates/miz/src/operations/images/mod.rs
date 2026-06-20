@@ -1,6 +1,7 @@
 //! `miz -I` / `--images` — manage OS image updates via systemd-sysupdated
-//! over D-Bus. Dispatch mirrors `sync::run`'s priority-ordered field checks,
-//! but context-less (no alpm handle).
+//! over D-Bus. Dispatch is priority-ordered (read-only verbs first, mutating
+//! verbs last — deliberately NOT a mirror of `sync::run`, which checks clean
+//! first). Context-less (no alpm handle).
 //!
 //! Phase 1: scaffold only. Every mode returns `NotImplemented`.
 
@@ -46,11 +47,14 @@ pub fn run(args: Args) -> Result<()> {
         return images_reboot(&args);
     }
 
+    eprintln!("miz: -I/--images is not yet implemented");
     Err(MizError::NotImplemented)
 }
 
 /// Split a positional target into `(component, Option<version>)`, mirroring
 /// `sync::split_repo_target`'s `repo/pkg` idiom. Defaults to component `"host"`.
+/// Wired into the read-only verbs in phase 2; only tests exercise it now.
+#[allow(dead_code)]
 fn split_component(target: Option<&str>) -> (&str, Option<&str>) {
     match target {
         Some(t) => match t.split_once('/') {
