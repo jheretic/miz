@@ -3,21 +3,19 @@
 //! verbs last — deliberately NOT a mirror of `sync::run`, which checks clean
 //! first). Context-less (no alpm handle).
 //!
-//! Phase 2: read-only verbs (-Il/-Ii/-Iy/-Ig/-Ip) are wired. Mutating verbs
-//! (-Iu/-Ic/-Ib) still return `NotImplemented`.
+//! All verbs are wired: read-only (-Il/-Ii/-Iy/-Ig/-Ip) and mutating
+//! (-Iu/-Ic/--reboot).
 
-// client carries the full proxy surface; phase 2 uses only the read-only
-// methods, so the mutating ones (Acquire/Install/Vacuum/Job) are dead until
-// phase 3. job.rs is phase-3 scaffold.
-#[allow(dead_code)]
 mod client;
 pub(crate) mod describe;
 mod format;
-#[allow(dead_code)]
 mod job;
 
 use crate::error::{MizError, Result};
-use client::{ManagerProxyBlocking, TargetProxyBlocking, FLAG_OFFLINE};
+use crate::operations::transaction::{confirm, should_prompt};
+use client::{
+    map_call_error, Login1ProxyBlocking, ManagerProxyBlocking, TargetProxyBlocking, FLAG_OFFLINE,
+};
 use describe::Describe;
 
 pub use crate::cli::args::images::Args;
@@ -226,16 +224,72 @@ fn images_features(_args: &Args) -> Result<()> {
     Err(MizError::NotImplemented)
 }
 
-fn images_upgrade(_args: &Args) -> Result<()> {
-    Err(MizError::NotImplemented)
+fn images_upgrade(args: &Args) -> Result<()> {
+    let (conn, targets) = connect()?;
+    let (component, version) = split_component(args.targets.first().map(String::as_str));
+    let (name, proxy) = resolve_target(&conn, &targets, component)?;
+    // "" lets sysupdate pick newest; a pinned version uses the
+    // update-to-version polkit action (admin auth).
+    let version = version.unwrap_or("");
+
+    // Subscribe to JobRemoved BEFORE Acquire so a fast job can't finish in the
+    // gap. Adapt the raw signal iterator into (id, status) for job::wait.
+    let manager = ManagerProxyBlocking::new(&conn)?;
+    let removed = manager
+        .receive_job_removed()
+        .map_err(map_call_error)?
+        .filter_map(|sig| sig.args().ok().map(|a| (a.id, a.status)));
+
+    // Acquire (download). No-version form is the no-auth `update` action.
+    let (acq_ver, acq_id, acq_path) = proxy.acquire(version, 0).map_err(map_call_error)?;
+    job::wait(&conn, &acq_path, acq_id, args.noprogressbar, removed)?;
+
+    if should_prompt(args.noconfirm) && !confirm("Proceed with installation? [Y/n] ") {
+        return Ok(());
+    }
+
+    // Install needs a fresh subscription (the prior iterator was consumed).
+    let removed = manager
+        .receive_job_removed()
+        .map_err(map_call_error)?
+        .filter_map(|sig| sig.args().ok().map(|a| (a.id, a.status)));
+    let (_iv, ins_id, ins_path) = proxy.install(&acq_ver, 0).map_err(map_call_error)?;
+    job::wait(&conn, &ins_path, ins_id, args.noprogressbar, removed)?;
+
+    if !args.quiet {
+        println!("{name}: updated to {acq_ver}");
+    }
+    if args.reboot {
+        return do_reboot(&conn);
+    }
+    Ok(())
 }
 
-fn images_vacuum(_args: &Args) -> Result<()> {
-    Err(MizError::NotImplemented)
+fn images_vacuum(args: &Args) -> Result<()> {
+    let (conn, targets) = connect()?;
+    let (component, _version) = split_component(args.targets.first().map(String::as_str));
+    let (name, proxy) = resolve_target(&conn, &targets, component)?;
+
+    // Vacuum is admin-auth; map a denial cleanly.
+    let (instances, disabled) = proxy.vacuum().map_err(map_call_error)?;
+    if !args.quiet {
+        println!("{name}: removed {instances} version(s), disabled {disabled} transfer(s)");
+    }
+    Ok(())
 }
 
-fn images_reboot(_args: &Args) -> Result<()> {
-    Err(MizError::NotImplemented)
+fn images_reboot(args: &Args) -> Result<()> {
+    let (conn, _targets) = connect()?;
+    let _ = args;
+    do_reboot(&conn)
+}
+
+/// Reboot via logind (`org.freedesktop.login1`), polkit-gated and D-Bus-native
+/// rather than shelling `systemctl`.
+fn do_reboot(conn: &zbus::blocking::Connection) -> Result<()> {
+    let login1 = Login1ProxyBlocking::new(conn).map_err(map_call_error)?;
+    login1.reboot(false).map_err(map_call_error)?;
+    Ok(())
 }
 
 #[cfg(test)]

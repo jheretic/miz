@@ -110,3 +110,36 @@ pub fn system_connection() -> Result<zbus::blocking::Connection> {
     zbus::blocking::Connection::system()
         .map_err(|e| MizError::Sysupdate(format!("cannot connect to the system D-Bus: {e}")))
 }
+
+/// Map a zbus error from a privileged call (Acquire/Install/Vacuum/Reboot) to a
+/// clean message when it is a polkit/auth denial, else pass it through as
+/// `MizError::Dbus`. Matches on the D-Bus error NAME, never the message text.
+pub fn map_call_error(e: zbus::Error) -> MizError {
+    if let zbus::Error::MethodError(name, _, _) = &e {
+        match name.as_str() {
+            "org.freedesktop.DBus.Error.AccessDenied"
+            | "org.freedesktop.DBus.Error.InteractiveAuthorizationRequired"
+            | "org.freedesktop.PolicyKit1.Error.NotAuthorized" => {
+                return MizError::Sysupdate(
+                    "this operation requires elevated privileges (run as root or via polkit)"
+                        .to_string(),
+                );
+            }
+            _ => {}
+        }
+    }
+    MizError::Dbus(e)
+}
+
+/// Login1 manager, for `--reboot`. Reboot routes through logind (polkit-gated,
+/// D-Bus-native) rather than shelling `systemctl`, keeping the whole op on the
+/// bus and off PATH assumptions.
+#[proxy(
+    interface = "org.freedesktop.login1.Manager",
+    default_service = "org.freedesktop.login1",
+    default_path = "/org/freedesktop/login1"
+)]
+pub trait Login1 {
+    /// `Reboot(in b interactive)`.
+    fn reboot(&self, interactive: bool) -> zbus::Result<()>;
+}

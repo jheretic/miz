@@ -15,7 +15,7 @@ pub fn install(alpm: &Alpm, noprogressbar: bool) {
     install_dl_cb(alpm, mp);
 }
 
-fn bar_style_op() -> ProgressStyle {
+pub(crate) fn bar_style_op() -> ProgressStyle {
     ProgressStyle::with_template("{prefix:>15} {bar:30} {percent:>3}% {msg}")
         .unwrap_or_else(|_| ProgressStyle::default_bar())
         .progress_chars("##-")
