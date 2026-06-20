@@ -103,8 +103,8 @@ fn resolve_target<'a>(
     Ok((entry.1.clone(), proxy))
 }
 
-fn list_flags(args: &Args) -> u64 {
-    if args.offline {
+fn list_flags(offline: bool) -> u64 {
+    if offline {
         FLAG_OFFLINE
     } else {
         0
@@ -116,7 +116,7 @@ fn images_list(args: &Args) -> Result<()> {
     let (component, _version) = split_component(args.targets.first().map(String::as_str));
     let (name, proxy) = resolve_target(&conn, &targets, component)?;
 
-    let flags = list_flags(args);
+    let flags = list_flags(args.offline);
     let versions = proxy.list(flags)?;
     let installed = proxy.get_version().unwrap_or_default();
 
@@ -146,18 +146,23 @@ fn images_info(args: &Args) -> Result<()> {
     let (component, version) = split_component(args.targets.first().map(String::as_str));
     let (name, proxy) = resolve_target(&conn, &targets, component)?;
 
-    let flags = list_flags(args);
-    // No version pinned -> describe the newest available ("" lets sysupdate pick).
+    let flags = list_flags(args.offline);
+    // No version pinned -> describe the newest available. TODO(phase3/live):
+    // confirm against a real systemd 257+ host that "" selects newest; the
+    // man page documents Describe(s,t) but not empty-string semantics. If
+    // wrong, resolve an explicit version via CheckNew/List first.
     let version = version.unwrap_or("");
     let json = proxy.describe(version, flags)?;
-    let d = Describe::parse(&json)
-        .map_err(|e| MizError::Sysupdate(format!("could not parse Describe JSON: {e}")))?;
 
+    // --json is a raw passthrough: dump the bytes the user asked for BEFORE
+    // any parse, so a malformed payload still prints rather than erroring.
     if args.json.is_some() {
         println!("{json}");
         return Ok(());
     }
 
+    let d = Describe::parse(&json)
+        .map_err(|e| MizError::Sysupdate(format!("could not parse Describe JSON: {e}")))?;
     let verbose = args.info >= 2 && !args.quiet;
     print!("{}", format::info_block(&name, &d, verbose));
     println!();
@@ -198,11 +203,13 @@ fn images_pending(args: &Args) -> Result<()> {
     let (name, proxy) = resolve_target(&conn, &targets, component)?;
 
     let current = proxy.get_version().unwrap_or_default();
+    let current_label = if current.is_empty() { "(none)" } else { &current };
     let newest = proxy.check_new()?;
 
     if newest.is_empty() || newest == current {
+        // Status note to stderr, matching -Iy's "no newer version" note.
         if !args.quiet {
-            println!("{name}: up to date ({current})");
+            eprintln!("{name}: up to date ({current_label})");
         }
         return Ok(());
     }
@@ -210,7 +217,7 @@ fn images_pending(args: &Args) -> Result<()> {
     if args.quiet {
         println!("{newest}");
     } else {
-        println!("{name}: update pending {current} -> {newest}");
+        println!("{name}: update pending {current_label} -> {newest}");
     }
     Ok(())
 }
@@ -233,7 +240,13 @@ fn images_reboot(_args: &Args) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::split_component;
+    use super::{list_flags, split_component, FLAG_OFFLINE};
+
+    #[test]
+    fn list_flags_offline_sets_bit() {
+        assert_eq!(list_flags(true), FLAG_OFFLINE);
+        assert_eq!(list_flags(false), 0);
+    }
 
     #[test]
     fn split_defaults_to_host() {
