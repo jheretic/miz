@@ -249,7 +249,7 @@ fn images_pending(args: &Args) -> Result<()> {
     // from -Iy/check-new ("is a download available"). GetVersion is the newest
     // installed; booted comes from os-release under --root.
     let installed = proxy.get_version().unwrap_or_default();
-    let booted = booted_image_version(&args.targets);
+    let booted = crate::operations::osrelease::booted_image_version();
     let installed_label = if installed.is_empty() {
         "(none)"
     } else {
@@ -276,22 +276,6 @@ fn images_pending(args: &Args) -> Result<()> {
         eprintln!("{name}: no reboot pending (booted {booted_label})");
     }
     Ok(())
-}
-
-/// Read `IMAGE_VERSION=` from `<root>/etc/os-release` (honoring a `--root`-style
-/// component path is not relevant here; sysupdate's host target is rooted at /).
-/// Returns None if the file or key is absent. Only the host target has a
-/// meaningful booted version; for other components this is best-effort.
-fn booted_image_version(_targets: &[String]) -> Option<String> {
-    let text = std::fs::read_to_string("/etc/os-release")
-        .or_else(|_| std::fs::read_to_string("/usr/lib/os-release"))
-        .ok()?;
-    for line in text.lines() {
-        if let Some(v) = line.strip_prefix("IMAGE_VERSION=") {
-            return Some(v.trim().trim_matches('"').to_string());
-        }
-    }
-    None
 }
 
 fn images_features(args: &Args) -> Result<()> {

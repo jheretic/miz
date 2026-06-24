@@ -1,0 +1,4 @@
+ID=archetype
+NAME="Archetype Linux"
+IMAGE_VERSION="2026.06.17-2"
+PRETTY_NAME="Archetype Linux"
