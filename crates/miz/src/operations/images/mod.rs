@@ -11,6 +11,7 @@ mod client;
 pub(crate) mod describe;
 mod format;
 mod job;
+mod relay;
 
 use crate::error::{MizError, Result};
 use crate::operations::transaction::{confirm, should_prompt};
@@ -24,7 +25,14 @@ pub use crate::cli::args::images::Args;
 /// A `Manager.ListTargets` row: (class, name, object path).
 type TargetEntry = (String, String, zbus::zvariant::OwnedObjectPath);
 
-pub fn run(args: Args) -> Result<()> {
+pub fn run(args: Args, config_path: Option<&std::path::Path>) -> Result<()> {
+    // Split-db image update: re-lay layered packages onto the new A/B image +
+    // snapshot. Context-bearing (relay builds its own /run-rooted handle), so
+    // it stays out of main.rs's needs_context path. Handled first so it never
+    // falls through to the D-Bus verbs.
+    if args.reinstall_layered {
+        return relay::run(args, config_path);
+    }
     if args.list {
         return images_list(&args);
     }

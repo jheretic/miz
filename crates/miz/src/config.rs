@@ -32,21 +32,16 @@ pub fn build_with_dbext(cli: &Cli, dbext: Option<&str>) -> Result<Context> {
         conf.archetype.as_ref().and_then(|a| a.layered_db.as_deref()),
         &conf.options.db_path,
     );
-
-    let mut alpm = alpm::Alpm::new(
-        root.as_os_str().as_encoded_bytes().to_vec(),
-        dbpath.as_os_str().as_encoded_bytes().to_vec(),
-    )?;
-    if let Some(ext) = dbext {
-        alpm.set_dbext(ext);
-    }
-    apply_config(&mut alpm, &conf)?;
+    let image_db = conf
+        .archetype
+        .as_ref()
+        .and_then(|a| a.image_db.clone());
 
     // Seed assume_installed from the read-only image db so packages already
     // provided by the immutable /usr are treated as satisfied during dependency
-    // resolution, rather than being reinstalled into the layered db. This runs
-    // AFTER apply_config (set_dbext + repos already registered — that ordering
-    // is load-bearing, see build_with_dbext doc comment) and before any
+    // resolution, rather than being reinstalled into the layered db. The
+    // seeding runs AFTER apply_config (set_dbext + repos already registered —
+    // that ordering is load-bearing, see assemble_context) and before any
     // transaction is built, so the existing add_install_targets/prepare path
     // only pulls genuinely-missing deps into the layered db. No change to
     // sync.rs is needed.
@@ -56,10 +51,78 @@ pub fn build_with_dbext(cli: &Cli, dbext: Option<&str>) -> Result<Context> {
     // persistent root. root stays "/", so the overlay routing is transparent to
     // alpm. `-S` on an image without the mutable overlay active will fail to
     // write /usr files — that is the accepted immutable contract.
-    if let Some(image_db) = conf.archetype.as_ref().and_then(|a| a.image_db.as_deref()) {
+    assemble_context(&conf, root, dbpath, dbext, image_db.as_deref())
+}
+
+/// Build a Context rooted at an arbitrary tree (the `-I --reinstall-layered`
+/// relay points this at the new A/B snapshot mounted under `/run`). Reuses the
+/// same repo-registration + assume_installed seeding as `build_with_dbext` via
+/// `assemble_context` — only the path inputs differ.
+///
+/// `staged_config` is the staged image's `miz.toml` (its date-pinned archive
+/// repos are used as-is). `root`/`dbpath` point into the `/run` snapshot.
+/// `image_db` is the NEW image's read-only db. `archive_date`, when set,
+/// overrides the staged config's archive repo servers via
+/// [`osrelease::archive_url`] (fallback path when the staged repos are not
+/// already date-pinned); the staged config's `archive_base` is honored.
+///
+/// SAFETY: this does NOT itself assert the `/run` containment invariant — the
+/// caller (relay) MUST verify `root` canonicalizes under `/run/` before
+/// invoking this, since constructing the Alpm handle is a prerequisite to a
+/// mutating transaction.
+pub fn build_for_root(
+    staged_config: &Path,
+    root: &Path,
+    dbpath: &Path,
+    image_db: &Path,
+    archive_date: Option<&str>,
+) -> Result<Context> {
+    let mut conf = load_config(Some(staged_config))?;
+    if let Some(date) = archive_date {
+        repin_archive_repos(&mut conf, date);
+    }
+    assemble_context(&conf, root.to_path_buf(), dbpath.to_path_buf(), None, Some(image_db))
+}
+
+/// Override the `servers` of the standard Arch repos (`core`/`extra`/
+/// `multilib`) with the date-pinned archive snapshot URL. Other repos
+/// (e.g. `archetype`) keep their configured servers. Used only by
+/// `build_for_root` when an explicit `archive_date` is supplied.
+fn repin_archive_repos(conf: &mut MizConfig, date: &str) {
+    let base = conf
+        .archetype
+        .as_ref()
+        .and_then(|a| a.archive_base.as_deref());
+    let url = crate::operations::osrelease::archive_url(base, date);
+    for repo in &mut conf.repos {
+        if matches!(repo.name.as_str(), "core" | "extra" | "multilib") {
+            repo.servers = vec![url.clone()];
+        }
+    }
+}
+
+/// Shared alpm-construction core: `Alpm::new` -> optional `set_dbext` ->
+/// `apply_config` (repos) -> `seed_assume_installed`. The single chokepoint so
+/// `build_with_dbext` and `build_for_root` never duplicate the ordering-
+/// sensitive setup.
+fn assemble_context(
+    conf: &MizConfig,
+    root: PathBuf,
+    dbpath: PathBuf,
+    dbext: Option<&str>,
+    image_db: Option<&Path>,
+) -> Result<Context> {
+    let mut alpm = alpm::Alpm::new(
+        root.as_os_str().as_encoded_bytes().to_vec(),
+        dbpath.as_os_str().as_encoded_bytes().to_vec(),
+    )?;
+    if let Some(ext) = dbext {
+        alpm.set_dbext(ext);
+    }
+    apply_config(&mut alpm, conf)?;
+    if let Some(image_db) = image_db {
         seed_assume_installed(&mut alpm, image_db);
     }
-
     Ok(Context { alpm, root })
 }
 
@@ -116,6 +179,12 @@ fn seed_assume_installed(alpm: &mut Alpm, image_db: &Path) {
     if let Err(e) = alpm.set_assume_installed(deps.iter().map(|d| d.as_dep())) {
         eprintln!("warning: failed to seed assume_installed from image db: {e}");
     }
+}
+
+/// Public wrapper around `load_config` for callers (e.g. the `-I` relay) that
+/// need the parsed config without building an Alpm handle.
+pub fn load_config_public(override_path: Option<&Path>) -> Result<MizConfig> {
+    load_config(override_path)
 }
 
 fn load_config(override_path: Option<&Path>) -> Result<MizConfig> {
@@ -338,5 +407,33 @@ mod tests {
     fn resolve_dbpath_falls_back_to_options_db_path() {
         let got = resolve_dbpath(None, None, Path::new("/var/lib/pacman"));
         assert_eq!(got, PathBuf::from("/var/lib/pacman"));
+    }
+
+    #[test]
+    fn repin_archive_repos_rewrites_arch_repos_only() {
+        let src = r#"
+            [archetype]
+            archive_base = "https://archive.archlinux.org/repos"
+
+            [[repos]]
+            name = "core"
+            servers = ["https://mirror.example/core"]
+
+            [[repos]]
+            name = "archetype"
+            servers = ["https://jheretic.github.io/archetype-repo/repo/2026/06/17"]
+        "#;
+        let mut conf: MizConfig = toml::from_str(src).unwrap();
+        repin_archive_repos(&mut conf, "2026/06/17");
+        let core = conf.repos.iter().find(|r| r.name == "core").unwrap();
+        assert_eq!(
+            core.servers,
+            vec!["https://archive.archlinux.org/repos/2026/06/17/$repo/os/$arch".to_string()]
+        );
+        let arch = conf.repos.iter().find(|r| r.name == "archetype").unwrap();
+        assert_eq!(
+            arch.servers,
+            vec!["https://jheretic.github.io/archetype-repo/repo/2026/06/17".to_string()]
+        );
     }
 }

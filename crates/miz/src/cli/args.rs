@@ -285,6 +285,13 @@ pub mod images {
         /// Operate on installed versions only (no network)
         #[arg(long)]
         pub offline: bool,
+        /// Reinstall layered packages onto the newly staged A/B image+snapshot
+        /// offline, then flip A/B + default-snapshot (split-db image update).
+        #[arg(long)]
+        pub reinstall_layered: bool,
+        /// Print the planned steps/commands without executing them
+        #[arg(long)]
+        pub dry_run: bool,
         /// Suppress markers / extra detail
         #[arg(short = 'q', long)]
         pub quiet: bool,

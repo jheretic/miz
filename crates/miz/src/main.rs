@@ -37,6 +37,7 @@ fn dispatch(cli: Cli) -> error::Result<()> {
     } else {
         None
     };
+    let config_path = cli.config.clone();
     match cli.op {
         Operation::Database(args) => operations::database::run(args, ctx.as_ref().unwrap()),
         Operation::Query(args) => operations::query::run(args, ctx.as_ref().unwrap()),
@@ -46,7 +47,7 @@ fn dispatch(cli: Cli) -> error::Result<()> {
         Operation::Upgrade(args) => operations::upgrade::run(args, ctx.as_mut().unwrap()),
         Operation::Files(args) => operations::files::run(args, ctx.as_mut().unwrap()),
         Operation::Version => operations::version::run(),
-        Operation::Images(args) => operations::images::run(args),
+        Operation::Images(args) => operations::images::run(args, config_path.as_deref()),
         Operation::Completions { shell } => {
             use clap::CommandFactory;
             let mut cmd = Cli::command();
