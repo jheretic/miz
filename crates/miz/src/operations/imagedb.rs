@@ -6,8 +6,7 @@ use std::path::Path;
 // and returns provision strings for alpm `assume_installed`. Each package yields
 // `name=version` (an EQ-mod entry is the only kind libalpm consults for a
 // versioned dep) plus every %PROVIDES% token verbatim.
-// Wired into config.rs in Phase 3; unused until then.
-#[allow(dead_code)]
+// Wired into config.rs (seed_assume_installed).
 pub fn provisions(image_db_root: &Path) -> Result<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();

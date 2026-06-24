@@ -1,6 +1,6 @@
 use crate::cli::Cli;
 use crate::error::{MizError, Result};
-use alpm::{Alpm, SigLevel, Usage};
+use alpm::{Alpm, Depend, SigLevel, Usage};
 use miz_config::{MizConfig, Repository};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -27,10 +27,11 @@ pub fn build_with_dbext(cli: &Cli, dbext: Option<&str>) -> Result<Context> {
         .root
         .clone()
         .unwrap_or_else(|| conf.options.root_dir.clone());
-    let dbpath = cli
-        .dbpath
-        .clone()
-        .unwrap_or_else(|| conf.options.db_path.clone());
+    let dbpath = resolve_dbpath(
+        cli.dbpath.as_deref(),
+        conf.archetype.as_ref().and_then(|a| a.layered_db.as_deref()),
+        &conf.options.db_path,
+    );
 
     let mut alpm = alpm::Alpm::new(
         root.as_os_str().as_encoded_bytes().to_vec(),
@@ -41,7 +42,80 @@ pub fn build_with_dbext(cli: &Cli, dbext: Option<&str>) -> Result<Context> {
     }
     apply_config(&mut alpm, &conf)?;
 
+    // Seed assume_installed from the read-only image db so packages already
+    // provided by the immutable /usr are treated as satisfied during dependency
+    // resolution, rather than being reinstalled into the layered db. This runs
+    // AFTER apply_config (set_dbext + repos already registered — that ordering
+    // is load-bearing, see build_with_dbext doc comment) and before any
+    // transaction is built, so the existing add_install_targets/prepare path
+    // only pulls genuinely-missing deps into the layered db. No change to
+    // sync.rs is needed.
+    //
+    // File placement: layered package files targeting /usr land in the
+    // extensions.mutable/usr overlay upper dir; everything else writes to the
+    // persistent root. root stays "/", so the overlay routing is transparent to
+    // alpm. `-S` on an image without the mutable overlay active will fail to
+    // write /usr files — that is the accepted immutable contract.
+    if let Some(image_db) = conf.archetype.as_ref().and_then(|a| a.image_db.as_deref()) {
+        seed_assume_installed(&mut alpm, image_db);
+    }
+
     Ok(Context { alpm, root })
+}
+
+/// Pick the alpm localdb path. Precedence: CLI `--dbpath` wins (explicit user
+/// override); else `[archetype].layered_db` (split-db installed system); else
+/// `[options].db_path` (classic pacman default). Kept as a pure helper so the
+/// precedence is unit-testable without constructing a real `Alpm`.
+fn resolve_dbpath(
+    cli_dbpath: Option<&Path>,
+    archetype_layered_db: Option<&Path>,
+    options_db_path: &Path,
+) -> PathBuf {
+    cli_dbpath
+        .or(archetype_layered_db)
+        .unwrap_or(options_db_path)
+        .to_path_buf()
+}
+
+/// Feed the image db's provisions to libalpm's assume_installed list.
+///
+/// Best-effort and NON-FATAL: this runs in the shared `build_with_dbext`, so a
+/// malformed image db must not abort every miz invocation (even read-only ones
+/// like `-Q`/`-F`). Failures and unparseable provisions are warned and skipped;
+/// the worst case is redundant-but-correct layered installs, never a crash.
+///
+/// Lifetime: `alpm_option_set_assumeinstalled` deep-copies each depend into the
+/// handle (libalpm `alpm_dep_dup`), so the temporary `Vec<Depend>` here can be
+/// dropped immediately after the call — nothing needs to outlive it or be
+/// stored in `Context`. Verified against alpm-5.0.2 handle.rs `set_assume_installed`
+/// + the C semantics.
+///
+/// Each provision is already `name=version` (an EQ-mod entry, the only kind
+/// libalpm consults for a versioned dep) or a bare/versioned provides token,
+/// per operations::imagedb::provisions.
+fn seed_assume_installed(alpm: &mut Alpm, image_db: &Path) {
+    let provisions = match crate::operations::imagedb::provisions(image_db) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("warning: could not read image db {}: {e}", image_db.display());
+            return;
+        }
+    };
+    // Depend::new panics on an embedded NUL (CString::new().unwrap()) and on a
+    // string libalpm can't parse into a dep, so guard before constructing. A
+    // bad token is skipped, not fatal.
+    let mut deps: Vec<Depend> = Vec::with_capacity(provisions.len());
+    for p in provisions {
+        if p.as_bytes().contains(&0) {
+            eprintln!("warning: skipping image-db provision with NUL byte");
+            continue;
+        }
+        deps.push(Depend::new(p));
+    }
+    if let Err(e) = alpm.set_assume_installed(deps.iter().map(|d| d.as_dep())) {
+        eprintln!("warning: failed to seed assume_installed from image db: {e}");
+    }
 }
 
 fn load_config(override_path: Option<&Path>) -> Result<MizConfig> {
@@ -238,5 +312,31 @@ mod tests {
     fn resolve_architectures_leaves_non_auto_alone() {
         let out = resolve_architectures(&["x86_64".to_string(), "aarch64".to_string()]);
         assert_eq!(out, vec!["x86_64".to_string(), "aarch64".to_string()]);
+    }
+
+    #[test]
+    fn resolve_dbpath_cli_wins_over_everything() {
+        let got = resolve_dbpath(
+            Some(Path::new("/cli/db")),
+            Some(Path::new("/var/lib/miz")),
+            Path::new("/var/lib/pacman"),
+        );
+        assert_eq!(got, PathBuf::from("/cli/db"));
+    }
+
+    #[test]
+    fn resolve_dbpath_layered_db_when_no_cli() {
+        let got = resolve_dbpath(
+            None,
+            Some(Path::new("/var/lib/miz")),
+            Path::new("/var/lib/pacman"),
+        );
+        assert_eq!(got, PathBuf::from("/var/lib/miz"));
+    }
+
+    #[test]
+    fn resolve_dbpath_falls_back_to_options_db_path() {
+        let got = resolve_dbpath(None, None, Path::new("/var/lib/pacman"));
+        assert_eq!(got, PathBuf::from("/var/lib/pacman"));
     }
 }

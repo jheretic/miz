@@ -387,7 +387,13 @@ package names and (where available) provides versions.
 
 - Query/`-Q` integration so layered + image packages both show in `miz -Q`
   (assume_installed does not populate localdb queries; image-db packages won't
-  appear in `-Q` without extra reader work).
+  appear in `-Q` without extra reader work). CONFIRMED by the Phase 3 review:
+  with `layered_db` set, `localdb()` is `/var/lib/miz`, so `-Q`/`-Qi`/`-Ql`/
+  `-Qo`/`-Sl` and `-T` only see layered packages — image packages are invisible
+  to them. Not a regression (classic miz without `[archetype]` is unchanged),
+  but the image-db-backed query/deptest layer is needed before split-db is
+  user-complete. `-T` (deptest.rs) specifically should consult the image-db
+  provisions, not just `localdb().find_satisfier`.
 - File-conflict detection between layered packages and image /usr files
   (assume_installed does not feed conflict checks).
 - GC of the layered db / orphan handling across image updates.
