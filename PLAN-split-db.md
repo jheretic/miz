@@ -412,3 +412,23 @@ package names and (where available) provides versions.
   dispatch; new `relay.rs` orchestration verb + `booted_image_version` reuse.
 - `/home/n0n/src/archetype/archetype-build/mkosi.postinst` — ships the split-db
   miz.toml + date-pinned archive repos (mirrors existing `configure_archetype_repo`).
+
+## Addendum: sysupdate D-Bus for the `-I` live path (decision)
+
+Question raised: does driving systemd-sysupdated over D-Bus get the live `-I`
+"most of the way except btrfs snapshotting"? Answer: it covers the `/usr` A/B
+swap slice (Acquire/Install/default-flip — miz already wraps these), but NOT
+the parts that are the actual point of split-db `-I`:
+  - layered-package reinstall into the staged tree (miz/alpm only — sysupdate
+    has no concept of /var/lib/miz or the archive snapshot),
+  - the btrfs root snapshot,
+  - the offline "mount new /usr + root snapshot under /run and run the layered
+    transaction into it before commit" staging (sysupdate is partition-image
+    oriented; no in-tree-transaction surface).
+
+Bigger finding: sysupdate is NOT YET CONFIGURED in the image at all — there are
+no .transfer/sysupdate.d definitions, so even the existing `-Iu` does nothing.
+That prerequisite is tracked separately (task #21: write + ship transfer defs),
+which BLOCKS the live `-I` work (task #20). Sequence: #21 (transfer defs) ->
+then #20 can lean on sysupdate Acquire/Install for the image swap and keep only
+the btrfs snapshot + layered reinstall in miz.
