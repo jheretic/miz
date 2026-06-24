@@ -1,0 +1,18 @@
+%NAME%
+foo
+
+%VERSION%
+1.2.3-1
+
+%DESC%
+A foo package
+
+%PROVIDES%
+libfoo.so=1-64
+bar
+
+%DEPENDS%
+glibc
+
+%FILES%
+usr/bin/foo

@@ -1,6 +1,7 @@
 pub mod database;
 pub mod deptest;
 pub mod files;
+pub mod imagedb;
 pub mod images;
 pub mod progress;
 pub mod query;
