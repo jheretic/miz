@@ -77,3 +77,15 @@ include = ["/etc/pacman.d/mirrorlist"]
 # [[repos]]
 # name = "multilib"
 # include = ["/etc/pacman.d/mirrorlist"]
+
+# ---- archetype (split-db) ----
+# miz-specific settings for an installed Archetype system. Deliberately NOT in
+# [options] (which mirrors pacman.conf). All keys optional; absent => classic
+# single-db pacman behaviour. When layered_db is set it overrides
+# options.db_path for the alpm localdb.
+# [archetype]
+# image_db = "/usr/lib/miz/db"                           # read-only, scanned for assume_installed
+# layered_db = "/var/lib/miz"                            # writable localdb (overrides options.db_path)
+# archive_base = "https://archive.archlinux.org/repos"  # date-pinned snapshot root
+# archive_date normally derived from os-release IMAGE_VERSION; override for testing
+# archive_date = "2026/06/17"

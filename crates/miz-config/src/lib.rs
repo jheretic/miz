@@ -37,6 +37,31 @@ pub struct MizConfig {
 
     #[serde(default, rename = "repos")]
     pub repos: Vec<Repository>,
+
+    /// miz-specific split-db settings (NOT a pacman.conf mirror). Absent =>
+    /// classic single-db pacman behaviour.
+    #[serde(default)]
+    pub archetype: Option<Archetype>,
+}
+
+/// Split-database / archive-snapshot settings for an installed Archetype
+/// system. All keys optional; deliberately kept out of `[options]` so that
+/// section stays a faithful pacman.conf mirror for the miz-convert round-trip.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Archetype {
+    /// Read-only image db scanned for assume_installed provisions.
+    pub image_db: Option<PathBuf>,
+
+    /// Writable layered localdb. When set, this overrides `options.db_path`
+    /// for the alpm localdb (wired in Phase 3).
+    pub layered_db: Option<PathBuf>,
+
+    /// Archive snapshot root, e.g. `https://archive.archlinux.org/repos`.
+    pub archive_base: Option<String>,
+
+    /// `YYYY/MM/DD` snapshot date; normally derived from os-release
+    /// IMAGE_VERSION, override for testing.
+    pub archive_date: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -326,6 +351,52 @@ mod tests {
         "#;
         let c: MizConfig = toml::from_str(src).unwrap();
         assert!(c.options.color);
+    }
+
+    #[test]
+    fn bare_config_has_no_archetype_section() {
+        let c: MizConfig = toml::from_str("").unwrap();
+        assert!(c.archetype.is_none());
+        // pacman defaults remain intact alongside the new optional section.
+        assert_eq!(c.options.db_path, PathBuf::from("/var/lib/pacman/"));
+        assert_eq!(c.options.parallel_downloads, 5);
+    }
+
+    #[test]
+    fn full_archetype_section_deserializes() {
+        let src = r#"
+            [archetype]
+            image_db = "/usr/lib/miz/db"
+            layered_db = "/var/lib/miz"
+            archive_base = "https://archive.archlinux.org/repos"
+            archive_date = "2026/06/17"
+        "#;
+        let c: MizConfig = toml::from_str(src).unwrap();
+        let a = c.archetype.expect("archetype section present");
+        assert_eq!(a.image_db, Some(PathBuf::from("/usr/lib/miz/db")));
+        assert_eq!(a.layered_db, Some(PathBuf::from("/var/lib/miz")));
+        assert_eq!(
+            a.archive_base,
+            Some("https://archive.archlinux.org/repos".to_string())
+        );
+        assert_eq!(a.archive_date, Some("2026/06/17".to_string()));
+    }
+
+    #[test]
+    fn archetype_section_roundtrips() {
+        let src = r#"
+            [archetype]
+            image_db = "/usr/lib/miz/db"
+            layered_db = "/var/lib/miz"
+        "#;
+        let c: MizConfig = toml::from_str(src).unwrap();
+        let serialized = toml::to_string(&c).unwrap();
+        let reparsed: MizConfig = toml::from_str(&serialized).unwrap();
+        let a = reparsed.archetype.expect("archetype survives round-trip");
+        assert_eq!(a.image_db, Some(PathBuf::from("/usr/lib/miz/db")));
+        assert_eq!(a.layered_db, Some(PathBuf::from("/var/lib/miz")));
+        assert_eq!(a.archive_base, None);
+        assert_eq!(a.archive_date, None);
     }
 
     #[test]
