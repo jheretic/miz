@@ -598,7 +598,7 @@ mod tests {
 
             [[repos]]
             name = "archetype"
-            servers = ["https://jheretic.github.io/archetype-repo/repo/2026/06/17"]
+            servers = ["https://repo.archetype.li/packages/2026/06/17"]
         "#;
         let mut conf: MizConfig = toml::from_str(src).unwrap();
         repin_archive_repos(&mut conf, "2026/06/17");
@@ -610,7 +610,7 @@ mod tests {
         let arch = conf.repos.iter().find(|r| r.name == "archetype").unwrap();
         assert_eq!(
             arch.servers,
-            vec!["https://jheretic.github.io/archetype-repo/repo/2026/06/17".to_string()]
+            vec!["https://repo.archetype.li/packages/2026/06/17".to_string()]
         );
     }
 }
