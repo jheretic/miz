@@ -1,9 +1,9 @@
 use crate::cli::Cli;
 use crate::error::{MizError, Result};
 use alpm::{Alpm, Depend, SigLevel, Usage};
-use miz_config::{MizConfig, Repository};
+use miz_config::{MizConfig, Options, Repository};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 pub struct Context {
     pub alpm: alpm::Alpm,
@@ -29,13 +29,12 @@ pub fn build_with_dbext(cli: &Cli, dbext: Option<&str>) -> Result<Context> {
         .unwrap_or_else(|| conf.options.root_dir.clone());
     let dbpath = resolve_dbpath(
         cli.dbpath.as_deref(),
-        conf.archetype.as_ref().and_then(|a| a.layered_db.as_deref()),
+        conf.archetype
+            .as_ref()
+            .and_then(|a| a.layered_db.as_deref()),
         &conf.options.db_path,
     );
-    let image_db = conf
-        .archetype
-        .as_ref()
-        .and_then(|a| a.image_db.clone());
+    let image_db = conf.archetype.as_ref().and_then(|a| a.image_db.clone());
 
     // Seed assume_installed from the read-only image db so packages already
     // provided by the immutable /usr are treated as satisfied during dependency
@@ -66,11 +65,27 @@ pub fn build_with_dbext(cli: &Cli, dbext: Option<&str>) -> Result<Context> {
 /// [`osrelease::archive_url`] (fallback path when the staged repos are not
 /// already date-pinned); the staged config's `archive_base` is honored.
 ///
+/// Build a Context rooted at the `/run` snapshot for the `-I` relay, FIRST
+/// rebasing every absolute filesystem option path (`cachedir`/`hookdir`/
+/// `gpgdir`/`logfile`) under `root` via [`reroot_options`] and rejecting any
+/// that escape it.
+///
+/// libalpm does NOT prefix these option paths with the alpm root, so a staged
+/// `miz.toml` whose `[options]` point at `/var/cache/pacman/pkg`,
+/// `/var/log/pacman.log`, `/etc/pacman.d/gnupg`, etc. would make a transaction
+/// write to the LIVE host even with `root=/run/...`. Re-rooting closes that
+/// hole; this is why the relay has no plain non-rerooted constructor.
+///
+/// `staged_config` is the staged image's `miz.toml`; `root`/`dbpath` point into
+/// the `/run` snapshot; `image_db` is the NEW image's read-only db;
+/// `archive_date`, when set, repins the archive repo servers via
+/// [`crate::operations::osrelease::archive_url`].
+///
 /// SAFETY: this does NOT itself assert the `/run` containment invariant — the
 /// caller (relay) MUST verify `root` canonicalizes under `/run/` before
 /// invoking this, since constructing the Alpm handle is a prerequisite to a
 /// mutating transaction.
-pub fn build_for_root(
+pub fn build_for_root_rerooted(
     staged_config: &Path,
     root: &Path,
     dbpath: &Path,
@@ -81,13 +96,90 @@ pub fn build_for_root(
     if let Some(date) = archive_date {
         repin_archive_repos(&mut conf, date);
     }
-    assemble_context(&conf, root.to_path_buf(), dbpath.to_path_buf(), None, Some(image_db))
+    reroot_options(&mut conf.options, root)?;
+    assemble_context(
+        &conf,
+        root.to_path_buf(),
+        dbpath.to_path_buf(),
+        None,
+        Some(image_db),
+    )
+}
+
+/// Rebase, in place, every filesystem option path libalpm consumes verbatim
+/// (cachedirs, hookdirs, gpgdir, logfile) under `root`. `db_path`/`root_dir`
+/// are NOT touched here: the relay passes its own `dbpath`/`root` to
+/// `assemble_context`, so `apply_config` never reads `opts.db_path`/`root_dir`.
+///
+/// Errors (fail-closed) if any path escapes `root` after lexical normalization.
+fn reroot_options(opts: &mut Options, root: &Path) -> Result<()> {
+    for dir in &mut opts.cache_dir {
+        *dir = reroot_under(root, dir)?;
+    }
+    for dir in &mut opts.hook_dir {
+        *dir = reroot_under(root, dir)?;
+    }
+    opts.gpg_dir = reroot_under(root, &opts.gpg_dir)?;
+    opts.log_file = reroot_under(root, &opts.log_file)?;
+    Ok(())
+}
+
+/// Rebase a single option `path` under `root`. Pure (no filesystem access):
+///
+/// * a path already under `root` is normalized and kept as-is (idempotent);
+/// * an absolute path is reparented onto `root` (its leading `/` stripped);
+/// * a relative path is joined onto `root`;
+///
+/// then the result is lexically normalized (resolving `.`/`..`) and REJECTED
+/// if it no longer lies under `root` — so a `..` sequence cannot smuggle the
+/// transaction back onto the live host.
+fn reroot_under(root: &Path, path: &Path) -> Result<PathBuf> {
+    let canon_root = lexical_normalize(root);
+    let candidate = if path.starts_with(&canon_root) {
+        lexical_normalize(path)
+    } else if path.is_absolute() {
+        let rel = path.strip_prefix("/").unwrap_or(path);
+        lexical_normalize(&canon_root.join(rel))
+    } else {
+        lexical_normalize(&canon_root.join(path))
+    };
+    if !candidate.starts_with(&canon_root) {
+        return Err(MizError::Other(format!(
+            "refusing to reinstall: option path {} escapes staged root {} (resolved to {})",
+            path.display(),
+            root.display(),
+            candidate.display()
+        )));
+    }
+    Ok(candidate)
+}
+
+/// Resolve `.` and `..` components purely lexically, with NO filesystem access
+/// (the staged paths need not exist yet). A `..` that would climb above the
+/// path root is preserved as a literal `..` so the caller's `starts_with`
+/// containment check still fails closed rather than silently clamping.
+fn lexical_normalize(p: &Path) -> PathBuf {
+    let mut stack: Vec<Component> = Vec::new();
+    for comp in p.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(stack.last(), Some(Component::Normal(_))) {
+                    stack.pop();
+                } else {
+                    stack.push(comp);
+                }
+            }
+            other => stack.push(other),
+        }
+    }
+    stack.iter().map(|c| c.as_os_str()).collect()
 }
 
 /// Override the `servers` of the standard Arch repos (`core`/`extra`/
 /// `multilib`) with the date-pinned archive snapshot URL. Other repos
 /// (e.g. `archetype`) keep their configured servers. Used only by
-/// `build_for_root` when an explicit `archive_date` is supplied.
+/// `build_for_root_rerooted` when an explicit `archive_date` is supplied.
 fn repin_archive_repos(conf: &mut MizConfig, date: &str) {
     let base = conf
         .archetype
@@ -103,7 +195,7 @@ fn repin_archive_repos(conf: &mut MizConfig, date: &str) {
 
 /// Shared alpm-construction core: `Alpm::new` -> optional `set_dbext` ->
 /// `apply_config` (repos) -> `seed_assume_installed`. The single chokepoint so
-/// `build_with_dbext` and `build_for_root` never duplicate the ordering-
+/// `build_with_dbext` and `build_for_root_rerooted` never duplicate the ordering-
 /// sensitive setup.
 fn assemble_context(
     conf: &MizConfig,
@@ -161,7 +253,10 @@ fn seed_assume_installed(alpm: &mut Alpm, image_db: &Path) {
     let provisions = match crate::operations::imagedb::provisions(image_db) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("warning: could not read image db {}: {e}", image_db.display());
+            eprintln!(
+                "warning: could not read image db {}: {e}",
+                image_db.display()
+            );
             return;
         }
     };
@@ -407,6 +502,88 @@ mod tests {
     fn resolve_dbpath_falls_back_to_options_db_path() {
         let got = resolve_dbpath(None, None, Path::new("/var/lib/pacman"));
         assert_eq!(got, PathBuf::from("/var/lib/pacman"));
+    }
+
+    #[test]
+    fn reroot_under_reparents_absolute_paths() {
+        let root = Path::new("/run/miz/next");
+        assert_eq!(
+            reroot_under(root, Path::new("/var/cache/pacman/pkg")).unwrap(),
+            PathBuf::from("/run/miz/next/var/cache/pacman/pkg")
+        );
+        assert_eq!(
+            reroot_under(root, Path::new("/var/log/pacman.log")).unwrap(),
+            PathBuf::from("/run/miz/next/var/log/pacman.log")
+        );
+    }
+
+    #[test]
+    fn reroot_under_is_idempotent_for_already_rooted_paths() {
+        let root = Path::new("/run/miz/next");
+        assert_eq!(
+            reroot_under(root, Path::new("/run/miz/next/var/cache")).unwrap(),
+            PathBuf::from("/run/miz/next/var/cache")
+        );
+    }
+
+    #[test]
+    fn reroot_under_joins_relative_paths() {
+        let root = Path::new("/run/miz/next");
+        assert_eq!(
+            reroot_under(root, Path::new("var/log/pacman.log")).unwrap(),
+            PathBuf::from("/run/miz/next/var/log/pacman.log")
+        );
+    }
+
+    #[test]
+    fn reroot_under_rejects_dotdot_escape() {
+        let root = Path::new("/run/miz/next");
+        // An absolute path whose normalized form climbs back out of root.
+        let err = reroot_under(root, Path::new("/../../etc/pacman.d/gnupg")).unwrap_err();
+        assert!(
+            err.to_string().contains("escapes staged root"),
+            "unexpected error: {err}"
+        );
+        // A path already "under" root textually but with .. climbing out.
+        let err = reroot_under(root, Path::new("/run/miz/next/../../../etc")).unwrap_err();
+        assert!(
+            err.to_string().contains("escapes staged root"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn reroot_options_rebases_every_fs_path() {
+        let mut opts = Options::default();
+        opts.cache_dir = vec![PathBuf::from("/var/cache/pacman/pkg/")];
+        opts.hook_dir = vec![PathBuf::from("/etc/pacman.d/hooks/")];
+        opts.gpg_dir = PathBuf::from("/etc/pacman.d/gnupg/");
+        opts.log_file = PathBuf::from("/var/log/pacman.log");
+        reroot_options(&mut opts, Path::new("/run/miz/next")).unwrap();
+        assert_eq!(
+            opts.cache_dir,
+            vec![PathBuf::from("/run/miz/next/var/cache/pacman/pkg")]
+        );
+        assert_eq!(
+            opts.hook_dir,
+            vec![PathBuf::from("/run/miz/next/etc/pacman.d/hooks")]
+        );
+        assert_eq!(
+            opts.gpg_dir,
+            PathBuf::from("/run/miz/next/etc/pacman.d/gnupg")
+        );
+        assert_eq!(
+            opts.log_file,
+            PathBuf::from("/run/miz/next/var/log/pacman.log")
+        );
+    }
+
+    #[test]
+    fn reroot_options_propagates_escape_error() {
+        let mut opts = Options::default();
+        opts.log_file = PathBuf::from("/run/miz/next/../../../var/log/pacman.log");
+        let err = reroot_options(&mut opts, Path::new("/run/miz/next")).unwrap_err();
+        assert!(err.to_string().contains("escapes staged root"));
     }
 
     #[test]

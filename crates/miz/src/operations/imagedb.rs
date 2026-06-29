@@ -54,7 +54,10 @@ pub fn provisions(image_db_root: &Path) -> Result<Vec<String>> {
                 }
             };
             let Some((name, version, provides)) = parse_desc(&text) else {
-                eprintln!("imagedb: skipping {}: missing %NAME%/%VERSION%", desc.display());
+                eprintln!(
+                    "imagedb: skipping {}: missing %NAME%/%VERSION%",
+                    desc.display()
+                );
                 continue;
             };
             for tok in std::iter::once(format!("{name}={version}")).chain(provides) {
@@ -105,7 +108,10 @@ pub fn explicit_packages(localdb_root: &Path) -> Result<Vec<String>> {
             }
         };
         let Some((name, _version, reason)) = parse_desc_reason(&text) else {
-            eprintln!("imagedb: skipping {}: missing %NAME%/%VERSION%", desc.display());
+            eprintln!(
+                "imagedb: skipping {}: missing %NAME%/%VERSION%",
+                desc.display()
+            );
             continue;
         };
         // reason 1 == dependency; 0 or absent == explicit.

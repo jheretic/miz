@@ -301,7 +301,7 @@ fn apply_overwrites(alpm: &mut Alpm, globs: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn add_install_targets(alpm: &Alpm, targets: &[String]) -> Result<()> {
+pub(crate) fn add_install_targets(alpm: &Alpm, targets: &[String]) -> Result<()> {
     for name in targets {
         let (repo, pkgname) = split_repo_target(name);
         let mut pkg: Option<&Package> = None;
