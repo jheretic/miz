@@ -1,6 +1,6 @@
 use crate::cli::Cli;
 use crate::error::{MizError, Result};
-use alpm::{Alpm, Depend, SigLevel, Usage};
+use alpm::{Alpm, Depend, LogLevel, SigLevel, Usage};
 use miz_config::{MizConfig, Options, Repository};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -197,6 +197,30 @@ fn repin_archive_repos(conf: &mut MizConfig, date: &str) {
 /// `apply_config` (repos) -> `seed_assume_installed`. The single chokepoint so
 /// `build_with_dbext` and `build_for_root_rerooted` never duplicate the ordering-
 /// sensitive setup.
+/// Forward libalpm's log messages into `tracing` so its diagnostics (notably
+/// the detailed download/TLS reason behind a terse error like
+/// `ALPM_ERR_LIBCURL` "download library error") are actually visible. Without
+/// this, alpm's ERROR line is discarded and the user only sees miz's mapped
+/// error. ERROR/WARNING surface at the default log level (warn); DEBUG/FUNCTION
+/// only with -v. Trailing newline (alpm lines carry one) is trimmed.
+fn register_log_cb(alpm: &Alpm) {
+    alpm.set_log_cb((), |level, msg, _| {
+        let msg = msg.trim_end();
+        if msg.is_empty() {
+            return;
+        }
+        if level.contains(LogLevel::ERROR) {
+            tracing::error!(target: "alpm", "{msg}");
+        } else if level.contains(LogLevel::WARNING) {
+            tracing::warn!(target: "alpm", "{msg}");
+        } else if level.contains(LogLevel::DEBUG) {
+            tracing::debug!(target: "alpm", "{msg}");
+        } else {
+            tracing::trace!(target: "alpm", "{msg}");
+        }
+    });
+}
+
 fn assemble_context(
     conf: &MizConfig,
     root: PathBuf,
@@ -208,6 +232,7 @@ fn assemble_context(
         root.as_os_str().as_encoded_bytes().to_vec(),
         dbpath.as_os_str().as_encoded_bytes().to_vec(),
     )?;
+    register_log_cb(&alpm);
     if let Some(ext) = dbext {
         alpm.set_dbext(ext);
     }

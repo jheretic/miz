@@ -1,0 +1,25 @@
+# miz build env (Fedora host, no system libalpm)
+
+miz is a BINARY crate that links libalpm. The host has no usable libalpm, so a
+stub provides the symbols at /tmp/fake-alpm.
+
+    export PATH="/home/n0n/.local/share/mise/installs/rust/stable/toolchains/stable-x86_64-unknown-linux-gnu/bin:$PATH"
+    export PKG_CONFIG_PATH=/tmp/fake-alpm/lib/pkgconfig
+    export LD_LIBRARY_PATH=/tmp/fake-alpm/lib
+    cargo test -p miz --bins <filter>      # miz is a binary crate
+
+## The stub (/tmp/fake-alpm/stub.c)
+Each libalpm symbol miz REFERENCES must be DEFINED in stub.c or the binary won't
+link (clippy/test type-check fine; only the final link fails). Most are no-op
+`void f(void){abort();}` -- real alpm calls abort, so live tests are #[ignore].
+`alpm_version` returns "16.0.0" so the alpm crate's checkver build script passes.
+
+Rebuild after adding a symbol:
+    cc -shared -fPIC -Wl,-soname,libalpm.so.16 -o lib/libalpm.so.16.0.0 stub.c
+    cd lib && ln -sf libalpm.so.16.0.0 libalpm.so.16 && ln -sf libalpm.so.16 libalpm.so
+
+GOTCHA: new miz code that calls a previously-unused alpm fn needs the symbol
+added to the stub. e.g. set_log_cb() -> needs alpm_option_set_logcb (+ the two
+get_logcb getters); without them: 'rust-lld: error: undefined symbol:
+alpm_option_set_logcb'. The /tmp stub is ephemeral (tmpfs) -- recreate it if the
+sandbox was reset.
