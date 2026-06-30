@@ -342,20 +342,31 @@ fn apply_config(alpm: &mut Alpm, conf: &MizConfig) -> Result<()> {
     alpm.set_disable_sandbox_syscalls(sb_sc);
     alpm.set_sandbox_user(opts.download_user.clone())?;
 
+    // $arch for server-URL substitution: the first resolved architecture, as
+    // pacman's frontend does (conf.c). None only if architecture=[] (unusual).
+    let arch = architectures.first().map(String::as_str);
     for repo in &conf.repos {
-        register_repo(alpm, repo)?;
+        register_repo(alpm, repo, arch)?;
     }
     Ok(())
 }
 
-fn register_repo(alpm: &mut Alpm, repo: &Repository) -> Result<()> {
+fn register_repo(alpm: &mut Alpm, repo: &Repository, arch: Option<&str>) -> Result<()> {
     let sig = if repo.sig_level.is_empty() {
         SigLevel::USE_DEFAULT
     } else {
         parse_sig_level(&repo.sig_level)
     };
     let db = alpm.register_syncdb_mut(repo.name.as_str(), sig)?;
-    db.set_servers(repo.servers.iter().map(String::as_str))?;
+    // libalpm does NOT expand $repo/$arch in server URLs -- that's done by
+    // pacman's frontend (conf.c), not the library. As a libalpm client miz must
+    // do it itself, or the literal "$arch"/"$repo" go to the server and 404.
+    let servers: Vec<String> = repo
+        .servers
+        .iter()
+        .map(|s| expand_server_url(s, &repo.name, arch))
+        .collect();
+    db.set_servers(servers.iter().map(String::as_str))?;
 
     let mut usage = Usage::NONE;
     for v in &repo.usage {
@@ -449,6 +460,19 @@ fn paths_to_strs(paths: &[PathBuf]) -> Vec<&str> {
 /// tokens pass through unchanged. Falls back to leaving `"auto"` in
 /// place if the kernel call fails (libalpm will then reject it; the
 /// user sees a clear error rather than a silent arch mismatch).
+/// Expand `$repo` and `$arch` in a server URL, as pacman's frontend does
+/// (conf.c: strreplace for each). libalpm does not do this. `$repo` -> the repo
+/// name; `$arch` -> the primary resolved architecture. If `$arch` is present but
+/// no architecture is known, it is left literal (and will fail loudly at fetch)
+/// -- matching pacman, which refuses such a server.
+fn expand_server_url(url: &str, repo: &str, arch: Option<&str>) -> String {
+    let mut out = url.replace("$repo", repo);
+    if let Some(a) = arch {
+        out = out.replace("$arch", a);
+    }
+    out
+}
+
 fn resolve_architectures(input: &[String]) -> Vec<String> {
     let machine = uname_machine();
     input
@@ -487,6 +511,32 @@ mod tests {
     fn uname_machine_returns_a_value_on_linux() {
         let m = uname_machine().expect("uname(2) should succeed on a Linux host");
         assert!(!m.is_empty(), "uname.machine should not be empty");
+    }
+
+    #[test]
+    fn expand_server_url_substitutes_repo_and_arch() {
+        assert_eq!(
+            expand_server_url(
+                "https://archive.archlinux.org/repos/2026/06/30/$repo/os/$arch",
+                "core",
+                Some("x86_64"),
+            ),
+            "https://archive.archlinux.org/repos/2026/06/30/core/os/x86_64"
+        );
+        // archetype's flat URL has neither wildcard -> unchanged.
+        assert_eq!(
+            expand_server_url(
+                "https://repo.archetype.li/packages/2026/06/30",
+                "archetype",
+                Some("x86_64")
+            ),
+            "https://repo.archetype.li/packages/2026/06/30"
+        );
+        // $arch left literal when no arch known (pacman refuses such a server).
+        assert_eq!(
+            expand_server_url("https://x/$repo/os/$arch", "extra", None),
+            "https://x/extra/os/$arch"
+        );
     }
 
     #[test]
