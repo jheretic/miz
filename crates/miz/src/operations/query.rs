@@ -61,6 +61,43 @@ fn image_db_listable(args: &Args) -> bool {
         && !args.changelog
 }
 
+/// Whether a targeted `-Qi <name>` should fall back to the image db. `-Qi` (or
+/// `-Qii`) with no other detail flag: the image `desc` carries enough to render
+/// a package-info block for a baked-in /usr package. `-Ql`/`-Qk`/`-Qc` are
+/// excluded (they need files/scriptlet data the image db doesn't provide).
+fn image_info_wanted(args: &Args) -> bool {
+    args.info > 0 && !args.list && args.check == 0 && !args.changelog
+}
+
+/// Render a package-info block for a baked-in /usr (image-db) package. Only the
+/// fields the image `desc` stores are shown; fields an alpm `Pkg` would add but
+/// the image db lacks (reverse-deps, install date/reason, validation) are
+/// omitted rather than faked. Layout mirrors [`print_info`].
+fn print_image_info(pkg: &crate::operations::imagedb::ImagePackage) {
+    let label = |k: &str, v: &str| println!("{:<19}: {}", k, v);
+    let none = |v: &[String]| {
+        if v.is_empty() {
+            "None".to_string()
+        } else {
+            v.join("  ")
+        }
+    };
+    label("Name", &pkg.name);
+    label("Version", &pkg.version);
+    label("Description", pkg.desc.as_deref().unwrap_or("None"));
+    label("Architecture", pkg.arch.as_deref().unwrap_or("None"));
+    label("URL", pkg.url.as_deref().unwrap_or("None"));
+    label("Licenses", &none(&pkg.licenses));
+    label("Groups", &none(&pkg.groups));
+    label("Provides", &none(&pkg.provides));
+    label("Depends On", &none(&pkg.depends));
+    if let Some(sz) = pkg.isize {
+        label("Installed Size", &format_size(sz));
+    }
+    label("Install Reason", "Shipped in the base image (/usr)");
+    println!();
+}
+
 fn query_local(args: &Args, ctx: &Context) -> Result<()> {
     let alpm = &ctx.alpm;
     let mut missing = false;
@@ -74,12 +111,14 @@ fn query_local(args: &Args, ctx: &Context) -> Result<()> {
         && !args.unrequired
         && !args.upgrades
     {
-        // Image-db fallback only for plain listing: this block is still
-        // reached for the detail modes (-Qi/-Ql/-Qk/-Qc), which need real Pkg
-        // metadata the image db lacks, so gate on image_db_listable -- an
-        // image-only name under a detail flag must fall through to "not found",
-        // not print a bare name/version line.
-        let image_extra = if image_db_listable(args) {
+        // Image-db fallback for a targeted lookup. Plain `-Q <name>` prints
+        // name/version (image_db_listable); `-Qi <name>` renders the desc
+        // fields the image db carries (image_info_wanted). The other detail
+        // modes (-Ql/-Qk/-Qc) need Pkg data the image db lacks, so an image-only
+        // name under those falls through to "not found".
+        let want_list = image_db_listable(args);
+        let want_info = image_info_wanted(args);
+        let image_extra = if want_list {
             image_db_extra(ctx)
         } else {
             Vec::new()
@@ -87,19 +126,30 @@ fn query_local(args: &Args, ctx: &Context) -> Result<()> {
         for name in &args.packages {
             match alpm.localdb().pkg(name.as_bytes()) {
                 Ok(pkg) => emit_pkg(args, ctx, pkg, &mut check_failed)?,
-                Err(_) => match image_extra.iter().find(|(n, _)| n == name) {
-                    Some((n, v)) => {
-                        if args.quiet {
-                            println!("{n}");
-                        } else {
-                            println!("{n} {v}");
+                Err(_) => {
+                    if want_list {
+                        if let Some((n, v)) = image_extra.iter().find(|(n, _)| n == name) {
+                            if args.quiet {
+                                println!("{n}");
+                            } else {
+                                println!("{n} {v}");
+                            }
+                            continue;
                         }
                     }
-                    None => {
-                        eprintln!("error: package '{name}' was not found");
-                        missing = true;
+                    if want_info {
+                        if let Some(info) = ctx
+                            .image_db
+                            .as_deref()
+                            .and_then(|db| crate::operations::imagedb::package_info(db, name))
+                        {
+                            print_image_info(&info);
+                            continue;
+                        }
                     }
-                },
+                    eprintln!("error: package '{name}' was not found");
+                    missing = true;
+                }
             }
         }
         if missing {
