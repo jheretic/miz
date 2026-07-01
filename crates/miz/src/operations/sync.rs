@@ -19,8 +19,22 @@ pub fn run(args: Args, ctx: &mut Context) -> Result<()> {
 
     if args.refresh > 0 {
         let force = args.refresh >= 2;
+        // pacman-style header + per-repo download bars (the dl callback fires
+        // per db file with the repo name). Register callbacks BEFORE update so
+        // the fetch renders; the &Alpm borrow ends before syncdbs_mut().
+        if !args.quiet {
+            eprintln!(":: Synchronizing package databases...");
+        }
+        crate::operations::progress::install(&ctx.alpm, args.noprogressbar);
         let dbs = ctx.alpm.syncdbs_mut();
-        let _ = dbs.update(force)?;
+        let up_to_date = dbs.update(force)?;
+        if !args.quiet {
+            if up_to_date {
+                eprintln!(" databases are up to date");
+            } else {
+                eprintln!(" package databases synchronized");
+            }
+        }
     }
 
     if let Some(re) = args.search.as_ref() {

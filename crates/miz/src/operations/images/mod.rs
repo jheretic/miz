@@ -64,8 +64,11 @@ pub fn run(args: Args, config_path: Option<&std::path::Path>) -> Result<()> {
         return images_reboot(&args);
     }
 
-    eprintln!("miz: -I/--images is not yet implemented");
-    Err(MizError::NotImplemented)
+    // No sub-verb given. -I is an operation family, not a standalone action
+    // (like pacman's bare -S), so this is a usage error rather than a default.
+    Err(MizError::Other(
+        "no image operation specified (use -Il to list, -Iu to update; -h for help)".to_string(),
+    ))
 }
 
 /// Split a positional target into `(component, Option<version>)`, mirroring

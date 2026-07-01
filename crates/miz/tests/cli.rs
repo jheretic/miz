@@ -14,12 +14,12 @@ fn dash_v_prints_version_and_exits_zero() {
 }
 
 #[test]
-fn dash_i_images_is_not_yet_implemented() {
+fn dash_i_without_a_verb_is_a_usage_error() {
     miz()
         .args(["-I", "anything"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("not yet implemented"));
+        .stderr(predicate::str::contains("no image operation specified"));
 }
 
 #[test]

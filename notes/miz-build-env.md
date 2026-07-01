@@ -14,9 +14,20 @@ link (clippy/test type-check fine; only the final link fails). Most are no-op
 `void f(void){abort();}` -- real alpm calls abort, so live tests are #[ignore].
 `alpm_version` returns "16.0.0" so the alpm crate's checkver build script passes.
 
-Rebuild after adding a symbol:
-    cc -shared -fPIC -Wl,-soname,libalpm.so.16 -o lib/libalpm.so.16.0.0 stub.c
+Rebuild after adding a symbol (NOTE: --export-dynamic is REQUIRED on this host;
+without it cc -shared puts the symbols only in the regular symtab, not .dynsym,
+so lld still reports them undefined even though `nm` shows them):
+    cc -shared -fPIC -Wl,--export-dynamic -Wl,-soname,libalpm.so.16 -o lib/libalpm.so.16.0.0 stub.c
     cd lib && ln -sf libalpm.so.16.0.0 libalpm.so.16 && ln -sf libalpm.so.16 libalpm.so
+
+## Regenerating the stub from scratch (after a tmpfs reset)
+The full symbol set is discovered by iterating: build -> collect
+`undefined symbol: alpm_*` -> add to stub -> rebuild. CRITICAL: ACCUMULATE the
+symbols across passes (union), never replace the list -- resolving one batch
+reveals the next, and dropping the earlier batch makes them undefined again
+(infinite oscillation at ~20). ~107 symbols total. pkg-config file:
+/tmp/fake-alpm/lib/pkgconfig/libalpm.pc (prefix=/tmp/fake-alpm, Version: 16.0.0,
+Libs: -L${libdir} -lalpm).
 
 GOTCHA: new miz code that calls a previously-unused alpm fn needs the symbol
 added to the stub. e.g. set_log_cb() -> needs alpm_option_set_logcb (+ the two
