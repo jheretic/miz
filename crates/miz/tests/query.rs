@@ -1,8 +1,144 @@
 mod common;
 
+use std::path::Path;
+
 use predicates::prelude::*;
 
-use common::{install_fake_pkg, make_test_root, miz, FakePkg};
+use common::{install_fake_pkg, make_test_root, miz, set_image_db, FakePkg};
+
+/// The committed image-db fixture tree (10-archetype/foo-1.2.3-1,
+/// 50-extra/baz-2.0-3). Shared by the image-db query tests below.
+fn image_db_fixture() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/image_db")
+}
+
+#[test]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+fn dash_q_unions_image_db_packages() {
+    let root = make_test_root();
+    // A layered /var package plus the baked-in /usr image db.
+    install_fake_pkg(&root, &FakePkg::minimal("layered", "1.0-1"));
+    let conf = set_image_db(&root, &image_db_fixture());
+
+    // Plain -Q lists BOTH the layered package and the image-db packages.
+    miz()
+        .args([
+            "--root",
+            root.path.to_str().unwrap(),
+            "--config",
+            conf.to_str().unwrap(),
+            "-Q",
+        ])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("layered 1.0-1")
+                .and(predicate::str::contains("foo 1.2.3-1"))
+                .and(predicate::str::contains("baz 2.0-3")),
+        );
+}
+
+#[test]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+fn dash_q_named_finds_image_only_package() {
+    let root = make_test_root();
+    let conf = set_image_db(&root, &image_db_fixture());
+    miz()
+        .args([
+            "--root",
+            root.path.to_str().unwrap(),
+            "--config",
+            conf.to_str().unwrap(),
+            "-Q",
+            "foo",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("foo 1.2.3-1"));
+}
+
+#[test]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+fn dash_q_localdb_shadows_image_db() {
+    let root = make_test_root();
+    // Install a layered 'foo' that shadows the image db's foo-1.2.3-1.
+    install_fake_pkg(&root, &FakePkg::minimal("foo", "9.9-9"));
+    let conf = set_image_db(&root, &image_db_fixture());
+    miz()
+        .args([
+            "--root",
+            root.path.to_str().unwrap(),
+            "--config",
+            conf.to_str().unwrap(),
+            "-Q",
+            "foo",
+        ])
+        .assert()
+        .success()
+        // localdb version wins; the image version is not shown.
+        .stdout(
+            predicate::str::contains("foo 9.9-9").and(predicate::str::contains("1.2.3-1").not()),
+        );
+}
+
+#[test]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+fn dash_qi_on_image_only_package_is_not_found() {
+    let root = make_test_root();
+    let conf = set_image_db(&root, &image_db_fixture());
+    // -Qi needs Pkg metadata the image db lacks, so an image-only name must NOT
+    // resolve to a bogus line -- it is reported not found.
+    miz()
+        .args([
+            "--root",
+            root.path.to_str().unwrap(),
+            "--config",
+            conf.to_str().unwrap(),
+            "-Qi",
+            "foo",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("was not found"));
+}
+
+#[test]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+fn dash_qs_searches_image_db() {
+    let root = make_test_root();
+    let conf = set_image_db(&root, &image_db_fixture());
+    miz()
+        .args([
+            "--root",
+            root.path.to_str().unwrap(),
+            "--config",
+            conf.to_str().unwrap(),
+            "-Qs",
+            "baz",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("image/baz 2.0-3"));
+}
+
+#[test]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+fn dash_q_unknown_name_still_errors_with_image_db() {
+    let root = make_test_root();
+    let conf = set_image_db(&root, &image_db_fixture());
+    miz()
+        .args([
+            "--root",
+            root.path.to_str().unwrap(),
+            "--config",
+            conf.to_str().unwrap(),
+            "-Q",
+            "does-not-exist",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("was not found"));
+}
 
 #[test]
 #[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]

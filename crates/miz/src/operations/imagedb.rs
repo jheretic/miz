@@ -71,6 +71,56 @@ pub fn provisions(image_db_root: &Path) -> Result<Vec<String>> {
     Ok(out)
 }
 
+// Lists every package in the read-only image db as (name, version) pairs, for
+// query operations (-Q/-Qs) that union the baked-in /usr packages with the
+// mutable /var localdb. Same grouped-tree traversal as `provisions`, but keeps
+// name+version instead of emitting provision tokens. Missing root -> empty
+// (non-fatal). Duplicate names across groups keep the first seen.
+pub fn installed_packages(image_db_root: &Path) -> Result<Vec<(String, String)>> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    let group_iter = match std::fs::read_dir(image_db_root) {
+        Ok(it) => it,
+        Err(e) => {
+            eprintln!("imagedb: cannot read {}: {e}", image_db_root.display());
+            return Ok(out);
+        }
+    };
+    for group in group_iter {
+        let group = match group {
+            Ok(g) => g.path(),
+            Err(_) => continue,
+        };
+        if !group.is_dir() {
+            continue;
+        }
+        let pkgs = match std::fs::read_dir(&group) {
+            Ok(it) => it,
+            Err(_) => continue,
+        };
+        for pkg in pkgs {
+            let pkg = match pkg {
+                Ok(p) => p.path(),
+                Err(_) => continue,
+            };
+            let desc = pkg.join("desc");
+            if !desc.is_file() {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&desc) else {
+                continue;
+            };
+            if let Some((name, version, _)) = parse_desc(&text) {
+                if seen.insert(name.clone()) {
+                    out.push((name, version));
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
 // Reads explicit-install package names from a layered localdb
 // (`<localdb_root>/<name>-<version>/desc`, e.g. /var/lib/miz/local). Used by
 // the `-I --reinstall-layered` relay to know which packages to re-add as
@@ -214,6 +264,25 @@ mod tests {
     fn missing_root_is_empty_not_error() {
         let got = provisions(Path::new("/nonexistent/miz/db")).unwrap();
         assert!(got.is_empty());
+    }
+
+    #[test]
+    fn installed_packages_lists_name_version() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/image_db");
+        let got: HashSet<(String, String)> =
+            installed_packages(&root).unwrap().into_iter().collect();
+        let want: HashSet<(String, String)> = [("foo", "1.2.3-1"), ("baz", "2.0-3")]
+            .iter()
+            .map(|(n, v)| (n.to_string(), v.to_string()))
+            .collect();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn installed_packages_missing_root_is_empty() {
+        assert!(installed_packages(Path::new("/nonexistent/miz/db"))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

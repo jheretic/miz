@@ -24,6 +24,43 @@ pub fn run(args: Args, ctx: &Context) -> Result<()> {
     query_local(&args, ctx)
 }
 
+/// Package names present in the baked-in `/usr` image db but NOT in the mutable
+/// `/var` localdb, as `(name, version)`. The localdb wins on a name collision
+/// (a layered package shadows its image version). Empty when no image db is
+/// configured. Only consulted by the plain-listing query paths -- see
+/// [`image_db_listable`].
+fn image_db_extra(ctx: &Context) -> Vec<(String, String)> {
+    let Some(path) = ctx.image_db.as_deref() else {
+        return Vec::new();
+    };
+    let pkgs = match crate::operations::imagedb::installed_packages(path) {
+        Ok(p) => p,
+        Err(_) => return Vec::new(),
+    };
+    pkgs.into_iter()
+        .filter(|(name, _)| ctx.alpm.localdb().pkg(name.as_bytes()).is_err())
+        .collect()
+}
+
+/// Whether the plain package listing should include image-db-only packages.
+/// The image db is a grouped desc tree, not an alpm localdb, so we only have
+/// name+version -- no reason/deps/files/upgrade metadata. Restrict the union to
+/// the plain list (and exact-name lookup): any flag that needs `Pkg` metadata
+/// (`-Qe/-Qd/-Qt/-Qm/-Qn/-Qu`, and the detail forms `-Qi/-Ql/-Qk/-Qc`) applies
+/// only to the mutable localdb, where that metadata exists.
+fn image_db_listable(args: &Args) -> bool {
+    !args.deps
+        && !args.explicit
+        && !args.foreign
+        && !args.native
+        && !args.unrequired
+        && !args.upgrades
+        && args.info == 0
+        && !args.list
+        && args.check == 0
+        && !args.changelog
+}
+
 fn query_local(args: &Args, ctx: &Context) -> Result<()> {
     let alpm = &ctx.alpm;
     let mut missing = false;
@@ -37,13 +74,32 @@ fn query_local(args: &Args, ctx: &Context) -> Result<()> {
         && !args.unrequired
         && !args.upgrades
     {
+        // Image-db fallback only for plain listing: this block is still
+        // reached for the detail modes (-Qi/-Ql/-Qk/-Qc), which need real Pkg
+        // metadata the image db lacks, so gate on image_db_listable -- an
+        // image-only name under a detail flag must fall through to "not found",
+        // not print a bare name/version line.
+        let image_extra = if image_db_listable(args) {
+            image_db_extra(ctx)
+        } else {
+            Vec::new()
+        };
         for name in &args.packages {
             match alpm.localdb().pkg(name.as_bytes()) {
                 Ok(pkg) => emit_pkg(args, ctx, pkg, &mut check_failed)?,
-                Err(_) => {
-                    eprintln!("error: package '{name}' was not found");
-                    missing = true;
-                }
+                Err(_) => match image_extra.iter().find(|(n, _)| n == name) {
+                    Some((n, v)) => {
+                        if args.quiet {
+                            println!("{n}");
+                        } else {
+                            println!("{n} {v}");
+                        }
+                    }
+                    None => {
+                        eprintln!("error: package '{name}' was not found");
+                        missing = true;
+                    }
+                },
             }
         }
         if missing {
@@ -109,10 +165,36 @@ fn query_local(args: &Args, ctx: &Context) -> Result<()> {
         emit_pkg(args, ctx, pkg, &mut check_failed)?;
     }
 
+    // Union in the baked-in /usr image-db packages that the mutable localdb
+    // doesn't shadow, so a plain `-Q`/`-Q <name>` lists the whole system, not
+    // just the layered /var packages. Gated to plain listing (image_db_listable)
+    // because the image db carries only name+version.
+    if image_db_listable(args) {
+        for (name, version) in image_db_extra(ctx) {
+            if let Some(ts) = target_set.as_ref() {
+                if !ts.contains(name.as_str()) {
+                    continue;
+                }
+            }
+            if args.quiet {
+                println!("{name}");
+            } else {
+                println!("{name} {version}");
+            }
+        }
+    }
+
     if let Some(ts) = target_set.as_ref() {
+        // Only parse the image db when it can satisfy the query (plain listing).
+        let image_extra = if image_db_listable(args) {
+            image_db_extra(ctx)
+        } else {
+            Vec::new()
+        };
         for name in ts {
-            let found = alpm.localdb().pkg(name.as_bytes()).is_ok();
-            if !found {
+            let in_local = alpm.localdb().pkg(name.as_bytes()).is_ok();
+            let in_image = image_extra.iter().any(|(n, _)| n == name);
+            if !in_local && !in_image {
                 eprintln!("error: package '{name}' was not found");
                 missing = true;
             }
@@ -474,6 +556,18 @@ fn query_search(args: &Args, ctx: &Context, pattern: &str) -> Result<()> {
             let desc = pkg.desc().unwrap_or("");
             println!("local/{} {}", pkg.name(), pkg.version());
             println!("    {desc}");
+        }
+    }
+    // Also search the baked-in /usr image db (name only -- no desc in that
+    // format). localdb-shadowed names are already excluded by image_db_extra.
+    for (name, version) in image_db_extra(ctx) {
+        if !re.is_match(&name) {
+            continue;
+        }
+        if args.quiet {
+            println!("{name}");
+        } else {
+            println!("image/{name} {version}");
         }
     }
     Ok(())

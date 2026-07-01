@@ -176,6 +176,20 @@ impl<'a> FakePkg<'a> {
 /// Stage a package into the test root's localdb without going through
 /// a libalpm transaction. Writes `desc`, `files`, and any actual file
 /// payloads under `<root>/`.
+/// Append an `[archetype]` section pointing `image_db` at `image_db_root` to
+/// the test root's miz.toml, so query operations union the baked-in /usr image
+/// db. Returns the config path to pass to `miz --config`.
+pub fn set_image_db(root: &TestRoot, image_db_root: &Path) -> PathBuf {
+    let conf = root.config_path();
+    let mut s = fs::read_to_string(&conf).expect("read miz.toml");
+    s.push_str(&format!(
+        "\n[archetype]\nimage_db = \"{}\"\n",
+        image_db_root.to_str().expect("image_db path utf-8"),
+    ));
+    fs::write(&conf, s).expect("rewrite miz.toml with image_db");
+    conf
+}
+
 pub fn install_fake_pkg(root: &TestRoot, pkg: &FakePkg<'_>) {
     let dir = root.local_pkg_dir(pkg.name, pkg.version);
     fs::create_dir_all(&dir).expect("mkdir local pkg dir");

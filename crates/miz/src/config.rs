@@ -8,6 +8,11 @@ use std::path::{Component, Path, PathBuf};
 pub struct Context {
     pub alpm: alpm::Alpm,
     pub root: PathBuf,
+    /// The read-only baked-in `/usr` image db (`[archetype].image_db`), if
+    /// configured. alpm's single localdb is the mutable `/var` layered db; the
+    /// image db is a separate grouped tree (not an alpm localdb), so query
+    /// operations read it via `operations::imagedb` and union the results.
+    pub image_db: Option<PathBuf>,
 }
 
 const DEFAULT_CONFIG_PATH: &str = "/etc/miz.toml";
@@ -240,7 +245,11 @@ fn assemble_context(
     if let Some(image_db) = image_db {
         seed_assume_installed(&mut alpm, image_db);
     }
-    Ok(Context { alpm, root })
+    Ok(Context {
+        alpm,
+        root,
+        image_db: image_db.map(Path::to_path_buf),
+    })
 }
 
 /// Pick the alpm localdb path. Precedence: CLI `--dbpath` wins (explicit user
