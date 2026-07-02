@@ -199,11 +199,33 @@ fn images_info(args: &Args) -> Result<()> {
     let (name, proxy) = resolve_target(&conn, &targets, component)?;
 
     let flags = list_flags(args.offline);
-    // No version pinned -> describe the newest available. TODO(phase3/live):
-    // confirm against a real systemd 257+ host that "" selects newest; the
-    // man page documents Describe(s,t) but not empty-string semantics. If
-    // wrong, resolve an explicit version via CheckNew/List first.
-    let version = version.unwrap_or("");
+    // sysupdated's Describe requires a CONCRETE, valid version: it calls
+    // version_is_valid() and rejects "" with org.freedesktop.DBus.Error.
+    // InvalidArgs "Invalid version" (sysupdated.c target_method_describe). So an
+    // empty version is never "newest" -- resolve one first. Explicit arg wins;
+    // else the installed version (GetVersion, like `-Qi` describes what's
+    // installed, and works offline); else fall back to the newest in List.
+    let resolved;
+    let version = match version {
+        Some(v) => v,
+        None => {
+            // Installed version first (works offline, matches `-Qi`); else the
+            // newest available via CheckNew (purpose-built "newest" -- avoids
+            // assuming List's ordering).
+            let installed = proxy.get_version().unwrap_or_default();
+            resolved = if !installed.is_empty() {
+                installed
+            } else {
+                proxy.check_new().unwrap_or_default()
+            };
+            if resolved.is_empty() {
+                return Err(MizError::Sysupdate(format!(
+                    "no installed or available version to describe for '{name}'"
+                )));
+            }
+            resolved.as_str()
+        }
+    };
     let json = proxy.describe(version, flags)?;
 
     // --json=short/pretty is a passthrough: emit the payload BEFORE any parse,
