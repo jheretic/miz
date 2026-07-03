@@ -23,6 +23,7 @@ thiserror          = { workspace = true }
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 regex              = "1"
+object             = { version = "0.36", default-features = false, features = ["read_core", "pe", "std"] }
 indicatif          = "0.17"
 serde              = { workspace = true }
 serde_json         = { workspace = true }

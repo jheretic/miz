@@ -57,6 +57,8 @@ use crate::operations::imagedb;
 use crate::operations::osrelease;
 use crate::operations::transaction::{commit, prepare, TransGuard};
 use alpm::TransFlag;
+use object::read::pe::PeFile64;
+use object::{Object, ObjectSection};
 use std::path::{Path, PathBuf};
 
 pub use crate::cli::args::images::Args;
@@ -252,6 +254,49 @@ fn assert_root_under_run(root: &Path) -> Result<PathBuf> {
 /// without a real /run path on disk. Operates on an already-canonical path.
 fn is_under_run(path: &Path) -> bool {
     path.starts_with("/run/") || path == Path::new("/run")
+}
+
+/// Extract the `usrhash=` value (the new `/usr`'s dm-verity root hash) from a
+/// kernel command line string. The root hash is the EXTERNAL trust anchor for
+/// verity (it is NOT recoverable from the data/hash partitions), so it must
+/// come from the trusted, Secure-Boot-signed UKI cmdline. Pure + unit-testable.
+fn parse_usrhash_from_cmdline(cmdline: &str) -> Option<String> {
+    cmdline
+        .split_whitespace()
+        .find_map(|tok| tok.strip_prefix("usrhash="))
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+}
+
+/// Read the `.cmdline` PE section of a UKI (`.efi`) and return its text. The
+/// baked cmdline carries `usrhash=` for that image's `/usr`. Uses the `object`
+/// crate to locate the section robustly rather than hand-parsing PE headers.
+fn read_uki_cmdline(uki: &Path) -> Result<String> {
+    let data = std::fs::read(uki)
+        .map_err(|e| MizError::Other(format!("cannot read UKI {}: {e}", uki.display())))?;
+    let pe = PeFile64::parse(&*data)
+        .map_err(|e| MizError::Other(format!("cannot parse UKI {} as PE: {e}", uki.display())))?;
+    let section = pe
+        .section_by_name(".cmdline")
+        .ok_or_else(|| MizError::Other(format!("UKI {} has no .cmdline section", uki.display())))?;
+    let bytes = section
+        .data()
+        .map_err(|e| MizError::Other(format!("cannot read .cmdline of {}: {e}", uki.display())))?;
+    // The section is NUL-padded to the file alignment; trim trailing NULs.
+    let text = String::from_utf8_lossy(bytes);
+    Ok(text.trim_end_matches('\0').trim().to_string())
+}
+
+/// The new `/usr`'s verity root hash, read from the new version's UKI on the
+/// ESP. Combines [`read_uki_cmdline`] + [`parse_usrhash_from_cmdline`].
+fn usrhash_from_uki(uki: &Path) -> Result<String> {
+    let cmdline = read_uki_cmdline(uki)?;
+    parse_usrhash_from_cmdline(&cmdline).ok_or_else(|| {
+        MizError::Other(format!(
+            "UKI {} .cmdline has no usrhash= (cannot open the new /usr verity): {cmdline:?}",
+            uki.display()
+        ))
+    })
 }
 
 pub fn run(args: Args, config_path: Option<&Path>) -> Result<()> {
@@ -529,6 +574,35 @@ mod tests {
 
     fn fixture(rel: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join(rel)
+    }
+
+    #[test]
+    fn parse_usrhash_from_cmdline_extracts_token() {
+        assert_eq!(
+            parse_usrhash_from_cmdline("root=x usrhash=abc123 splash quiet").as_deref(),
+            Some("abc123")
+        );
+        // first token wins; leading/trailing whitespace tolerated by split.
+        assert_eq!(
+            parse_usrhash_from_cmdline("  usrhash=deadbeef  ").as_deref(),
+            Some("deadbeef")
+        );
+        assert_eq!(parse_usrhash_from_cmdline("root=x splash quiet"), None);
+        assert_eq!(parse_usrhash_from_cmdline("usrhash="), None);
+    }
+
+    #[test]
+    fn read_uki_cmdline_and_usrhash_from_fixture() {
+        let uki = fixture("tests/fixtures/uki-cmdline.efi");
+        let cmdline = read_uki_cmdline(&uki).unwrap();
+        assert!(
+            cmdline.contains("root=/dev/gpt-auto-root"),
+            "unexpected cmdline: {cmdline:?}"
+        );
+        assert_eq!(
+            usrhash_from_uki(&uki).unwrap(),
+            "deadbeefcafe1234567890abcdef"
+        );
     }
 
     #[test]
