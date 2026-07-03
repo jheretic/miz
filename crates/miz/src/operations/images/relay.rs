@@ -299,6 +299,38 @@ fn usrhash_from_uki(uki: &Path) -> Result<String> {
     })
 }
 
+/// The per-version root subvolume name, `@archetype_<version>`.
+///
+/// CROSS-REPO CONTRACT: this MUST byte-match archetype-install's
+/// `root_subvol_name` (which seeds the subvolume at install time) and the UKI's
+/// baked `rootflags=subvol=@archetype_%v` (archetype-build/mkosi.conf). All
+/// three derive the name from the same `IMAGE_VERSION`, so a /usr rollback lands
+/// on the matching root snapshot. Pure + unit-testable.
+fn subvol_for_version(version: &str) -> String {
+    format!("@archetype_{version}")
+}
+
+/// Which `@archetype_<version>` subvolumes to prune (Q5). Given every subvolume
+/// name present at the btrfs top-level and the set of `/usr` versions the
+/// updater keeps (sysupdate's `InstancesMax=2` -> the current + the one prior),
+/// return the `@archetype_*` subvolumes whose version is NOT kept. Non-archetype
+/// subvolumes and kept versions are never returned. Pure + unit-testable.
+///
+/// This mirrors the /usr A/B retention so root snapshots don't accumulate: each
+/// kept /usr version has exactly one matching root snapshot (its UKI's
+/// rootflags target); anything older is unreachable and removable.
+fn snapshots_to_prune(existing: &[String], keep_versions: &[&str]) -> Vec<String> {
+    let keep: Vec<String> = keep_versions
+        .iter()
+        .map(|v| subvol_for_version(v))
+        .collect();
+    existing
+        .iter()
+        .filter(|name| name.starts_with("@archetype_") && !keep.contains(*name))
+        .cloned()
+        .collect()
+}
+
 pub fn run(args: Args, config_path: Option<&Path>) -> Result<()> {
     let conf = config::load_config_public(config_path)?;
 
@@ -464,7 +496,6 @@ fn live_execute(plan: &Plan, next_root: &Path, archive_date_override: Option<&st
         )));
     }
 
-    let staged_config = canon_root.join("etc/miz.toml");
     let dbpath = canon_root.join("var/lib/miz");
     let image_db = canon_root.join("usr/lib/miz/db");
     let archive_date = match archive_date_override {
@@ -472,16 +503,13 @@ fn live_execute(plan: &Plan, next_root: &Path, archive_date_override: Option<&st
         None => staged_version.as_deref().map(osrelease::image_date),
     };
 
-    // Re-rooted constructor: rebases cachedir/hookdir/gpgdir/logfile under
-    // canon_root (or fails closed) so the transaction cannot write to the live
-    // host. Plain build_for_root would NOT be safe here.
-    let mut ctx = config::build_for_root_rerooted(
-        &staged_config,
-        &canon_root,
-        &dbpath,
-        &image_db,
-        archive_date.as_deref(),
-    )?;
+    // Re-rooted constructor: loads the LAYERED config from the snapshot root
+    // (vendor /usr/lib/miz/miz.toml from the NEW /usr + /etc override) and
+    // rebases cachedir/hookdir/gpgdir/logfile under canon_root (or fails closed)
+    // so the transaction cannot write to the live host. The new /usr's vendor
+    // repos (incl. [archetype]) are thus used automatically.
+    let mut ctx =
+        config::build_for_root_rerooted(&canon_root, &dbpath, &image_db, archive_date.as_deref())?;
 
     reinstall_into(&mut ctx, &plan.reinstall_targets)?;
 
@@ -603,6 +631,37 @@ mod tests {
             usrhash_from_uki(&uki).unwrap(),
             "deadbeefcafe1234567890abcdef"
         );
+    }
+
+    #[test]
+    fn subvol_name_matches_cross_repo_contract() {
+        // MUST match archetype-install root_subvol_name + UKI rootflags target.
+        assert_eq!(
+            subvol_for_version("2026.07.01-7"),
+            "@archetype_2026.07.01-7"
+        );
+    }
+
+    #[test]
+    fn snapshots_to_prune_keeps_only_the_two_usr_versions() {
+        let existing = vec![
+            "@archetype_2026.06.01-1".to_string(),
+            "@archetype_2026.06.15-2".to_string(),
+            "@archetype_2026.07.01-7".to_string(),
+            "@snapshots".to_string(), // non-archetype: never pruned
+            "@home".to_string(),      // non-archetype: never pruned
+        ];
+        // keep newest two (matching sysupdate InstancesMax=2).
+        let keep = ["2026.07.01-7", "2026.06.15-2"];
+        let mut pruned = snapshots_to_prune(&existing, &keep);
+        pruned.sort();
+        assert_eq!(pruned, vec!["@archetype_2026.06.01-1"]);
+    }
+
+    #[test]
+    fn snapshots_to_prune_never_touches_non_archetype_subvols() {
+        let existing = vec!["@home".to_string(), "@var".to_string(), "root".to_string()];
+        assert!(snapshots_to_prune(&existing, &["2026.07.01-7"]).is_empty());
     }
 
     #[test]

@@ -15,7 +15,22 @@ pub struct Context {
     pub image_db: Option<PathBuf>,
 }
 
+/// User override layer. Optional: absent means "vendor config as-is".
 const DEFAULT_CONFIG_PATH: &str = "/etc/miz.toml";
+
+/// Vendor base layer, shipped in the immutable `/usr` image and date-pinned at
+/// build time (mkosi.postinst writes the full repo set here). Carrying the repo
+/// configuration in `/usr` (beside the image db at `/usr/lib/miz/db`) instead of
+/// `/etc` means an A/B update brings the correct, matching repos automatically:
+/// the `-Iu` relay mounts the NEW `/usr` into the root snapshot, so `-Syu`
+/// resolves against the new version's repos with no string-surgery on a
+/// user-editable file. `/etc/miz.toml` is a pure, optional override layer.
+const VENDOR_CONFIG_PATH: &str = "/usr/lib/miz/miz.toml";
+
+/// Path of the vendor config relative to a root (for the rerooted relay path).
+const VENDOR_CONFIG_REL: &str = "usr/lib/miz/miz.toml";
+/// Path of the user override relative to a root.
+const USER_CONFIG_REL: &str = "etc/miz.toml";
 
 /// Build a Context with an optional sync-db file extension override.
 ///
@@ -81,23 +96,26 @@ pub fn build_with_dbext(cli: &Cli, dbext: Option<&str>) -> Result<Context> {
 /// write to the LIVE host even with `root=/run/...`. Re-rooting closes that
 /// hole; this is why the relay has no plain non-rerooted constructor.
 ///
-/// `staged_config` is the staged image's `miz.toml`; `root`/`dbpath` point into
-/// the `/run` snapshot; `image_db` is the NEW image's read-only db;
-/// `archive_date`, when set, repins the archive repo servers via
-/// [`crate::operations::osrelease::archive_url`].
+/// The config is loaded LAYERED from `root` (`<root>/usr/lib/miz/miz.toml`
+/// vendor base + `<root>/etc/miz.toml` user override), so the NEW image's
+/// vendor repos (incl. `[archetype]`, mounted into the snapshot from the new
+/// `/usr`) are used — no string surgery on the user file. `root`/`dbpath` point
+/// into the `/run` snapshot; `image_db` is the NEW image's read-only db;
+/// `archive_date`, when set, repins core/extra/multilib to the archive snapshot
+/// via [`crate::operations::osrelease::archive_url`] (the date derives from the
+/// new `/usr`'s os-release).
 ///
 /// SAFETY: this does NOT itself assert the `/run` containment invariant — the
 /// caller (relay) MUST verify `root` canonicalizes under `/run/` before
 /// invoking this, since constructing the Alpm handle is a prerequisite to a
 /// mutating transaction.
 pub fn build_for_root_rerooted(
-    staged_config: &Path,
     root: &Path,
     dbpath: &Path,
     image_db: &Path,
     archive_date: Option<&str>,
 ) -> Result<Context> {
-    let mut conf = load_config(Some(staged_config))?;
+    let mut conf = load_layered_from_root(root)?;
     if let Some(date) = archive_date {
         repin_archive_repos(&mut conf, date);
     }
@@ -316,14 +334,163 @@ pub fn load_config_public(override_path: Option<&Path>) -> Result<MizConfig> {
     load_config(override_path)
 }
 
+/// Load the effective config by layering the vendor base (`/usr/lib/miz/miz.toml`)
+/// under the user override (`/etc/miz.toml`).
+///
+/// - `override_path = Some(p)`: an explicit `--config p` (or a rerooted staged
+///   config). Loaded ALONE, no vendor layering — the caller named an exact file
+///   and gets exactly it. (The rerooted relay layers explicitly; see
+///   [`load_layered_from_root`].)
+/// - `override_path = None`: the normal path. Merge vendor + user with
+///   [`merge_config_tables`] (user keys win per-key; repos by name).
+///
+/// At least one layer must exist; if neither does, the vendor-missing error is
+/// surfaced (that is the build-provided file, so its absence is the real fault).
 fn load_config(override_path: Option<&Path>) -> Result<MizConfig> {
-    let path = override_path.unwrap_or(Path::new(DEFAULT_CONFIG_PATH));
+    if let Some(path) = override_path {
+        return load_single(path);
+    }
+    load_layered(
+        Path::new(VENDOR_CONFIG_PATH),
+        Path::new(DEFAULT_CONFIG_PATH),
+    )
+}
+
+/// Load and deserialize one TOML config file with no layering.
+fn load_single(path: &Path) -> Result<MizConfig> {
     let bytes = fs::read_to_string(path)
         .map_err(|e| MizError::Other(format!("{}: {e}", path.display())))?;
     toml::from_str(&bytes).map_err(|source| MizError::Toml {
         path: path.to_path_buf(),
         source,
     })
+}
+
+/// Layer the user override over the vendor base. Either file may be absent:
+/// vendor-only (no `/etc` override) is the common installed case; user-only
+/// (no vendor, e.g. a plain non-image host) preserves the pre-split behaviour.
+/// Merging is done on the raw TOML tables BEFORE deserialization, because
+/// `Options` fields all carry `#[serde(default)]` — after deserialization a
+/// defaulted value is indistinguishable from a user-set one, so a struct-level
+/// merge could not honour "override only keys the user actually wrote".
+fn load_layered(vendor: &Path, user: &Path) -> Result<MizConfig> {
+    let vendor_tbl = read_optional_table(vendor)?;
+    let user_tbl = read_optional_table(user)?;
+    let merged = match (vendor_tbl, user_tbl) {
+        (None, None) => {
+            return Err(MizError::Other(format!(
+                "no miz config found: neither {} (vendor) nor {} (user override) exists",
+                vendor.display(),
+                user.display()
+            )))
+        }
+        (Some(v), None) => v,
+        (None, Some(u)) => u,
+        (Some(v), Some(u)) => merge_config_tables(v, u),
+    };
+    merged.try_into().map_err(|source| MizError::Toml {
+        path: user.to_path_buf(),
+        source,
+    })
+}
+
+/// Rerooted variant of [`load_layered`] for the relay: layer
+/// `<root>/usr/lib/miz/miz.toml` under `<root>/etc/miz.toml`.
+pub fn load_layered_from_root(root: &Path) -> Result<MizConfig> {
+    load_layered(&root.join(VENDOR_CONFIG_REL), &root.join(USER_CONFIG_REL))
+}
+
+/// Read a TOML file into a `toml::Table`, or `None` if it does not exist.
+/// A present-but-unreadable or malformed file is a hard error (fail closed).
+fn read_optional_table(path: &Path) -> Result<Option<toml::Table>> {
+    match fs::read_to_string(path) {
+        Ok(bytes) => {
+            let tbl = bytes
+                .parse::<toml::Table>()
+                .map_err(|source| MizError::Toml {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
+            Ok(Some(tbl))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(MizError::Other(format!("{}: {e}", path.display()))),
+    }
+}
+
+/// Merge the user table over the vendor table (user wins), returning the merged
+/// table. Rules, tailored to the miz schema:
+/// - `[options]`: per-key override — a key present in user replaces vendor;
+///   keys only in vendor survive.
+/// - `[archetype]`: same per-key override.
+/// - `[[repos]]`: matched by `name`. A user repo with the same name replaces the
+///   vendor repo in place (preserving order); a new name is appended after the
+///   vendor repos. This lets a user retarget or add a repo without restating
+///   the whole vendor set.
+/// - any other top-level key: user replaces vendor.
+fn merge_config_tables(mut vendor: toml::Table, user: toml::Table) -> toml::Table {
+    for (key, uval) in user {
+        match key.as_str() {
+            "options" | "archetype" => {
+                let merged = match (vendor.remove(&key), uval) {
+                    (Some(toml::Value::Table(v)), toml::Value::Table(u)) => {
+                        toml::Value::Table(merge_sub_table(v, u))
+                    }
+                    (_, uval) => uval,
+                };
+                vendor.insert(key, merged);
+            }
+            "repos" => {
+                let merged = match (vendor.remove(&key), uval) {
+                    (Some(toml::Value::Array(v)), toml::Value::Array(u)) => {
+                        toml::Value::Array(merge_repos_by_name(v, u))
+                    }
+                    (_, uval) => uval,
+                };
+                vendor.insert(key, merged);
+            }
+            _ => {
+                vendor.insert(key, uval);
+            }
+        }
+    }
+    vendor
+}
+
+/// Per-key override of one sub-table (user key replaces vendor key).
+fn merge_sub_table(mut vendor: toml::Table, user: toml::Table) -> toml::Table {
+    for (k, v) in user {
+        vendor.insert(k, v);
+    }
+    vendor
+}
+
+/// Merge `[[repos]]` arrays by the `name` field: same name replaces in place,
+/// new name appends. Entries without a string `name` are appended verbatim.
+fn merge_repos_by_name(vendor: Vec<toml::Value>, user: Vec<toml::Value>) -> Vec<toml::Value> {
+    let repo_name = |v: &toml::Value| {
+        v.as_table()
+            .and_then(|t| t.get("name"))
+            .and_then(|n| n.as_str())
+            .map(str::to_string)
+    };
+    let mut result = vendor;
+    for u in user {
+        match repo_name(&u) {
+            Some(name) => {
+                if let Some(slot) = result
+                    .iter_mut()
+                    .find(|v| repo_name(v).as_deref() == Some(name.as_str()))
+                {
+                    *slot = u;
+                } else {
+                    result.push(u);
+                }
+            }
+            None => result.push(u),
+        }
+    }
+    result
 }
 
 fn apply_config(alpm: &mut Alpm, conf: &MizConfig) -> Result<()> {
@@ -515,6 +682,73 @@ fn path_to_str(p: &Path) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tbl(s: &str) -> toml::Table {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn merge_options_overrides_per_key_not_wholesale() {
+        let vendor =
+            tbl("[options]\nparallel_downloads = 5\ncheck_space = true\nhold_pkg = [\"pacman\"]\n");
+        let user = tbl("[options]\nparallel_downloads = 10\n");
+        let merged = merge_config_tables(vendor, user);
+        let opts = merged["options"].as_table().unwrap();
+        // user key wins
+        assert_eq!(opts["parallel_downloads"].as_integer(), Some(10));
+        // vendor-only keys survive (NOT wiped by a wholesale section replace)
+        assert_eq!(opts["check_space"].as_bool(), Some(true));
+        assert_eq!(opts["hold_pkg"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn merge_repos_by_name_replaces_and_appends_preserving_order() {
+        let vendor = tbl(
+            "[[repos]]\nname = \"core\"\nservers = [\"https://vendor/core\"]\n\
+             [[repos]]\nname = \"archetype\"\nservers = [\"https://vendor/arch\"]\n",
+        );
+        let user = tbl(
+            "[[repos]]\nname = \"archetype\"\nservers = [\"https://user/arch\"]\n\
+             [[repos]]\nname = \"aur\"\nservers = [\"https://user/aur\"]\n",
+        );
+        let merged = merge_config_tables(vendor, user);
+        let repos = merged["repos"].as_array().unwrap();
+        let names: Vec<&str> = repos
+            .iter()
+            .map(|r| r.as_table().unwrap()["name"].as_str().unwrap())
+            .collect();
+        // core kept, archetype replaced in place, aur appended.
+        assert_eq!(names, vec!["core", "archetype", "aur"]);
+        let arch = repos[1].as_table().unwrap();
+        assert_eq!(
+            arch["servers"].as_array().unwrap()[0].as_str(),
+            Some("https://user/arch")
+        );
+    }
+
+    #[test]
+    fn load_layered_vendor_only_when_no_user_override() {
+        let dir = std::env::temp_dir().join(format!("miz-cfg-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let vendor = dir.join("vendor.toml");
+        let user = dir.join("user-absent.toml");
+        std::fs::write(&vendor, "[options]\nparallel_downloads = 7\n").unwrap();
+        let _ = std::fs::remove_file(&user);
+        let conf = load_layered(&vendor, &user).unwrap();
+        assert_eq!(conf.options.parallel_downloads, 7);
+        let _ = std::fs::remove_file(&vendor);
+    }
+
+    #[test]
+    fn load_layered_errors_when_neither_layer_exists() {
+        let miss_v = Path::new("/nonexistent/vendor.toml");
+        let miss_u = Path::new("/nonexistent/user.toml");
+        let err = load_layered(miss_v, miss_u).unwrap_err();
+        assert!(
+            err.to_string().contains("no miz config found"),
+            "unexpected: {err}"
+        );
+    }
 
     #[test]
     fn uname_machine_returns_a_value_on_linux() {
