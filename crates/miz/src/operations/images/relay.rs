@@ -795,6 +795,31 @@ fn live_execute(new_version: &str, quiet: bool) -> Result<()> {
 
     sysupgrade_into(&mut ctx, quiet)?;
 
+    // Install the per-version rootflags addon beside the new UKI on the ESP, so
+    // it boots @archetype_<new_version>. rootflags=subvol= is NOT in the base UKI
+    // cmdline (it breaks the live boot's root=tmpfs); it ships as a signed
+    // per-UKI addon baked into the new /usr. systemd-stub resolves
+    // <uki>.efi.extra.d/ with the boot-assessment counter stripped, so the dir
+    // is always archetype_<version>.efi.extra.d regardless of the UKI's tries
+    // suffix. Fail-closed BEFORE commit: a new UKI without its matching addon
+    // would gpt-auto-mount the wrong (default) subvol, so a failure here must
+    // roll the whole update back (teardown removes the new UKI + snapshot).
+    let addon_src = canon_root.join("usr/lib/archetype/rootflags.addon.efi");
+    let extra_d = uki
+        .parent()
+        .ok_or_else(|| MizError::Other(format!("UKI path {} has no parent", uki.display())))?
+        .join(format!("archetype_{new_version}.efi.extra.d"));
+    fs::create_dir_all(&extra_d)
+        .map_err(|e| MizError::Other(format!("cannot create {}: {e}", extra_d.display())))?;
+    let addon_dst = extra_d.join("rootflags.addon.efi");
+    fs::copy(&addon_src, &addon_dst).map_err(|e| {
+        MizError::Other(format!(
+            "cannot install rootflags addon {} -> {}: {e}",
+            addon_src.display(),
+            addon_dst.display()
+        ))
+    })?;
+
     // Success: keep the new snapshot; prune root snapshots that no longer match
     // one of the two kept /usr versions (new + old, mirroring InstancesMax=2).
     td.commit();
