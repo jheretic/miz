@@ -112,6 +112,9 @@ fn convert(pc: &pacmanconf::Config) -> miz_config::MizConfig {
             use_delta: pc.use_delta,
         },
         repos: pc.repos.iter().map(convert_repo).collect(),
+        // pacman.conf has no split-db/archive settings; a converted config is a
+        // plain single-db setup.
+        archetype: None,
     }
 }
 
