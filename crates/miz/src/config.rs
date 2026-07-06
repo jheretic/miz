@@ -328,12 +328,6 @@ fn seed_assume_installed(alpm: &mut Alpm, image_db: &Path) {
     }
 }
 
-/// Public wrapper around `load_config` for callers (e.g. the `-I` relay) that
-/// need the parsed config without building an Alpm handle.
-pub fn load_config_public(override_path: Option<&Path>) -> Result<MizConfig> {
-    load_config(override_path)
-}
-
 /// Load the effective config by layering the vendor base (`/usr/lib/miz/miz.toml`)
 /// under the user override (`/etc/miz.toml`).
 ///
@@ -872,11 +866,13 @@ mod tests {
 
     #[test]
     fn reroot_options_rebases_every_fs_path() {
-        let mut opts = Options::default();
-        opts.cache_dir = vec![PathBuf::from("/var/cache/pacman/pkg/")];
-        opts.hook_dir = vec![PathBuf::from("/etc/pacman.d/hooks/")];
-        opts.gpg_dir = PathBuf::from("/etc/pacman.d/gnupg/");
-        opts.log_file = PathBuf::from("/var/log/pacman.log");
+        let mut opts = Options {
+            cache_dir: vec![PathBuf::from("/var/cache/pacman/pkg/")],
+            hook_dir: vec![PathBuf::from("/etc/pacman.d/hooks/")],
+            gpg_dir: PathBuf::from("/etc/pacman.d/gnupg/"),
+            log_file: PathBuf::from("/var/log/pacman.log"),
+            ..Default::default()
+        };
         reroot_options(&mut opts, Path::new("/run/miz/next")).unwrap();
         assert_eq!(
             opts.cache_dir,
@@ -898,8 +894,10 @@ mod tests {
 
     #[test]
     fn reroot_options_propagates_escape_error() {
-        let mut opts = Options::default();
-        opts.log_file = PathBuf::from("/run/miz/next/../../../var/log/pacman.log");
+        let mut opts = Options {
+            log_file: PathBuf::from("/run/miz/next/../../../var/log/pacman.log"),
+            ..Default::default()
+        };
         let err = reroot_options(&mut opts, Path::new("/run/miz/next")).unwrap_err();
         assert!(err.to_string().contains("escapes staged root"));
     }

@@ -419,6 +419,16 @@ fn images_upgrade(args: &Args) -> Result<()> {
     if !args.quiet {
         println!("{name}: updated to {acq_ver}");
     }
+
+    // Default named-subvolume relay: sysupdate has written the new /usr + UKI to
+    // the inactive slot; now snapshot the root per version and upgrade layered
+    // packages against the new image so a /usr rollback keeps them consistent
+    // (see relay module docs). Only for the host component (the /usr image);
+    // optional feature/sysext updates have no layered-root coupling.
+    if component == "host" {
+        relay::relay_after_upgrade(&acq_ver, args.dry_run, args.quiet)?;
+    }
+
     if args.reboot {
         return do_reboot(&conn);
     }

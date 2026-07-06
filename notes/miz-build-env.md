@@ -20,6 +20,12 @@ so lld still reports them undefined even though `nm` shows them):
     cc -shared -fPIC -Wl,--export-dynamic -Wl,-soname,libalpm.so.16 -o lib/libalpm.so.16.0.0 stub.c
     cd lib && ln -sf libalpm.so.16.0.0 libalpm.so.16 && ln -sf libalpm.so.16 libalpm.so
 
+GOTCHA (cost ~4 wasted passes once): the stub MUST start with `#include <stdlib.h>`
+before any `abort()` stub. Without it, `cc` FAILS to compile (implicit-declaration
+error) so the `.so` is never rewritten -- the iterate-loop then sees the SAME
+undefined symbols every pass and never converges. Seed the fresh stub.c with the
+include line, not just `alpm_version`.
+
 ## Regenerating the stub from scratch (after a tmpfs reset)
 The full symbol set is discovered by iterating: build -> collect
 `undefined symbol: alpm_*` -> add to stub -> rebuild. CRITICAL: ACCUMULATE the
