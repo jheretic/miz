@@ -1,5 +1,15 @@
 # miz build env (Fedora host, no system libalpm)
 
+CI-PARITY LESSON (bit us 2x): `cargo <cmd> -p miz` is NOT what CI runs. CI does
+WHOLE-WORKSPACE `cargo build --verbose`, `cargo clippy --tests -- -D warnings`,
+`cargo test --verbose`. Two misses that `-p miz` hid: (1) miz-convert (links no
+libalpm, outside `-p miz`) failing whole-workspace build after a MizConfig field
+was added but its struct literal not updated; (2) clippy warnings that only fire
+under `-D warnings`. Before declaring green on miz work, run the whole-workspace
+CI-equivalent trio, not just `-p miz`. (miz-convert builds without the stub; the
+`miz` bin still needs /tmp/fake-alpm per below.)
+
+
 miz is a BINARY crate that links libalpm. The host has no usable libalpm, so a
 stub provides the symbols at /tmp/fake-alpm.
 
