@@ -253,22 +253,14 @@ fn cmdline_pins_subvol(cmdline: &str, version: &str) -> bool {
         })
 }
 
-/// The new `/usr`'s verity root hash, read from the new version's UKI on the
-/// ESP -- but ONLY after verifying the UKI also pins the matching root
-/// subvolume (`rootflags=subvol=@archetype_<version>`). If the UKI booted a
-/// different (or no) subvol, the root snapshot we build would not be the one
-/// this UKI boots, breaking the rollback invariant -- so fail closed.
-fn usrhash_from_uki(uki: &Path, version: &str) -> Result<String> {
+/// The new `/usr`'s verity root hash, read from the new version's UKI's
+/// `.cmdline` (`usrhash=<hex>`, embedded + Secure-Boot-signed at build time).
+///
+/// Note: root-subvolume pinning is NOT in the UKI cmdline -- it is delivered as
+/// a per-UKI addon (see the rootflags addon install in the relay), so it is
+/// verified there, not here.
+fn usrhash_from_uki(uki: &Path) -> Result<String> {
     let cmdline = read_uki_cmdline(uki)?;
-    if !cmdline_pins_subvol(&cmdline, version) {
-        return Err(MizError::Other(format!(
-            "UKI {} does not pin rootflags=subvol={} (its cmdline: {cmdline:?}); \
-             refusing to relay -- the new UKI would not boot the root snapshot we \
-             build, breaking version-matched rollback",
-            uki.display(),
-            subvol_for_version(version)
-        )));
-    }
     parse_usrhash_from_cmdline(&cmdline).ok_or_else(|| {
         MizError::Other(format!(
             "UKI {} .cmdline has no usrhash= (cannot open the new /usr verity): {cmdline:?}",
@@ -674,7 +666,7 @@ fn live_execute(new_version: &str, quiet: bool) -> Result<()> {
     let usr_data = partition_by_label(&format!("archetype_{new_version}"))?;
     let usr_hash_dev = partition_by_label(&format!("archetype_{new_version}_verity"))?;
     let uki = find_new_uki(new_version)?;
-    let roothash = usrhash_from_uki(&uki, new_version)?;
+    let roothash = usrhash_from_uki(&uki)?;
 
     // ATOMICITY: sysupdate already wrote the new UKI (rootflags=subvol=<new>,
     // TriesLeft=3) to the ESP BEFORE this relay ran. If the relay now fails, the
@@ -805,6 +797,20 @@ fn live_execute(new_version: &str, quiet: bool) -> Result<()> {
     // would gpt-auto-mount the wrong (default) subvol, so a failure here must
     // roll the whole update back (teardown removes the new UKI + snapshot).
     let addon_src = canon_root.join("usr/lib/archetype/rootflags.addon.efi");
+    // Verify the addon actually pins THIS version's subvolume before trusting it
+    // (fail closed): the whole rollback invariant depends on the new UKI booting
+    // @archetype_<new_version>. The addon is a PE with a .cmdline section, same
+    // as a UKI, so read_uki_cmdline works on it.
+    let addon_cmdline = read_uki_cmdline(&addon_src)?;
+    if !cmdline_pins_subvol(&addon_cmdline, new_version) {
+        return Err(MizError::Other(format!(
+            "rootflags addon {} does not pin rootflags=subvol={} (its cmdline: \
+             {addon_cmdline:?}); refusing to relay -- the new UKI would not boot \
+             the root snapshot we build, breaking version-matched rollback",
+            addon_src.display(),
+            subvol_for_version(new_version)
+        )));
+    }
     let extra_d = uki
         .parent()
         .ok_or_else(|| MizError::Other(format!("UKI path {} has no parent", uki.display())))?
@@ -908,14 +914,16 @@ mod tests {
             cmdline.contains("root=/dev/gpt-auto-root"),
             "unexpected cmdline: {cmdline:?}"
         );
-        // The fixture pins subvol @archetype_2026.07.01-7, so the version-checked
-        // extractor succeeds for that version and yields the usrhash.
+        // usrhash extraction is independent of subvol pinning (which now lives in
+        // the addon, verified separately).
         assert_eq!(
-            usrhash_from_uki(&uki, "2026.07.01-7").unwrap(),
+            usrhash_from_uki(&uki).unwrap(),
             "deadbeefcafe1234567890abcdef"
         );
-        // A mismatched version fails closed (UKI would boot a different subvol).
-        assert!(usrhash_from_uki(&uki, "2026.06.01-1").is_err());
+        // The same fixture doubles as an addon-cmdline sample: it pins
+        // @archetype_2026.07.01-7 (the relay verifies the addon this way).
+        assert!(cmdline_pins_subvol(&cmdline, "2026.07.01-7"));
+        assert!(!cmdline_pins_subvol(&cmdline, "2026.06.01-1"));
     }
 
     #[test]
