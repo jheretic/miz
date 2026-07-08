@@ -843,7 +843,15 @@ fn live_execute(new_version: &str, quiet: bool) -> Result<()> {
 fn sysupgrade_into(ctx: &mut config::Context, _quiet: bool) -> Result<()> {
     {
         let dbs = ctx.alpm.syncdbs_mut();
-        dbs.update(false)?;
+        // force=true: refresh the sync dbs UNCONDITIONALLY. A normal (force=false)
+        // update sends a conditional GET (If-None-Match/If-Modified-Since) hoping
+        // for a cheap 304, but repo.archetype.li's CDN (Cloudflare) returns 412
+        // for those conditional requests instead of 304 -> libalpm treats it as a
+        // hard download failure and -Iu aborts. Forcing skips the conditional
+        // path and uses the plain GET (which returns 200), at the cost of
+        // re-downloading a few-KB db. The proper CDN-side fix is tracked
+        // separately; this keeps the relay working regardless.
+        dbs.update(true)?;
     }
     let mut guard = TransGuard::new(&mut ctx.alpm, TransFlag::NONE)?;
     guard.alpm().sync_sysupgrade(false)?;
