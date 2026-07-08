@@ -973,7 +973,17 @@ fn prune_old_snapshots(toplevel: &Path, keep_versions: &[&str], quiet: bool) {
         let path = toplevel.join(&name);
         let cmd = PlannedCommand::new(
             "prune old root snapshot",
-            &["btrfs", "subvolume", "delete", &path.display().to_string()],
+            // -R: successful root snapshots now contain recreated nested
+            // subvolumes (recreate_nested_subvols), and a plain delete refuses a
+            // subvol that contains nested subvols -> the prune would fail and old
+            // roots would leak. Recursive delete tears the nested ones down too.
+            &[
+                "btrfs",
+                "subvolume",
+                "delete",
+                "-R",
+                &path.display().to_string(),
+            ],
         );
         if let Err(e) = run_command(&cmd) {
             if !quiet {
