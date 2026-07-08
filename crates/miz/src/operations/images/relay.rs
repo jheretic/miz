@@ -158,6 +158,29 @@ fn parse_subvol_list(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// From a whole-filesystem `btrfs subvolume list` output, return the subvolumes
+/// NESTED under `parent` (e.g. `@archetype_<old>`), as paths RELATIVE to that
+/// parent (e.g. `var/tmp`, `var/lib/machines`).
+///
+/// `btrfs subvolume snapshot` is not recursive: nested subvolumes become empty
+/// stub dirs in the snapshot (btrfs-subvolume(8): "a subvolume/snapshot is
+/// effectively a barrier ... there's a stub subvolume"). So after snapshotting
+/// the root the relay must recreate each nested subvol with its contents, or
+/// e.g. /var/tmp is an empty non-subvol stub -> PrivateTmp= setup fails ->
+/// dbus-broker/logind can't start. Pure + unit-testable.
+fn nested_subvols_under(list_output: &str, parent: &str) -> Vec<String> {
+    let prefix = format!("{parent}/");
+    let mut out: Vec<String> = parse_subvol_list(list_output)
+        .into_iter()
+        .filter_map(|p| p.strip_prefix(&prefix).map(str::to_string))
+        .filter(|rel| !rel.is_empty())
+        .collect();
+    // Shallowest first, so a parent nested subvol is recreated before its own
+    // children (a nested subvol inside a nested subvol).
+    out.sort_by_key(|p| p.matches('/').count());
+    out
+}
+
 /// Parse the btrfs SOURCE device from `findmnt -no FSTYPE,SOURCE /`. Fails
 /// closed unless FSTYPE is exactly `btrfs`. Pure + unit-testable.
 fn parse_findmnt_source(text: &str) -> Result<String> {
@@ -301,6 +324,62 @@ fn existing_archetype_subvols(toplevel: &Path) -> Result<Vec<String>> {
         .into_iter()
         .filter(|n| n.starts_with("@archetype_"))
         .collect())
+}
+
+/// Recreate, inside the freshly-snapshotted `new_subvol`, every nested subvolume
+/// that exists under `old_subvol` -- with its contents -- since `btrfs subvolume
+/// snapshot` leaves nested subvols as empty stubs. For each nested path: remove
+/// the stub in new, then snapshot the OLD nested subvol into that path. `toplevel`
+/// is the mounted btrfs top-level; `old_subvol`/`new_subvol` are its children.
+fn recreate_nested_subvols(toplevel: &Path, old_subvol: &str, new_subvol: &str) -> Result<()> {
+    // Whole-fs list (not `-o`, which is non-recursive and would miss deeper nests).
+    let out = std::process::Command::new("btrfs")
+        .args(["subvolume", "list"])
+        .arg(toplevel)
+        .output()
+        .map_err(|e| MizError::Other(format!("failed to list btrfs subvolumes: {e}")))?;
+    if !out.status.success() {
+        return Err(MizError::Other(format!(
+            "btrfs subvolume list failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    let nested = nested_subvols_under(&String::from_utf8_lossy(&out.stdout), old_subvol);
+    for rel in nested {
+        let old_nested = toplevel.join(old_subvol).join(&rel);
+        let new_stub = toplevel.join(new_subvol).join(&rel);
+        // Remove the empty stub the snapshot left (rmdir: it must be empty; if a
+        // deeper nested subvol already recreated content under it, shallowest-
+        // first ordering ensures we process the parent first while still empty).
+        if new_stub.exists() {
+            run_command(&PlannedCommand::new(
+                "remove nested-subvol stub in the new snapshot",
+                &[
+                    "btrfs",
+                    "subvolume",
+                    "delete",
+                    &new_stub.display().to_string(),
+                ],
+            ))
+            .or_else(|_| {
+                // Not a subvolume stub (plain empty dir) -> rmdir it instead.
+                std::fs::remove_dir(&new_stub).map_err(|e| {
+                    MizError::Other(format!("cannot remove stub {}: {e}", new_stub.display()))
+                })
+            })?;
+        }
+        run_command(&PlannedCommand::new(
+            "recreate nested subvolume with contents (snapshot of old nested subvol)",
+            &[
+                "btrfs",
+                "subvolume",
+                "snapshot",
+                &old_nested.display().to_string(),
+                &new_stub.display().to_string(),
+            ],
+        ))?;
+    }
+    Ok(())
 }
 
 /// Locate a block device by GPT partition label via `lsblk`. Fails closed if no
@@ -621,7 +700,9 @@ fn live_execute(new_version: &str, quiet: bool) -> Result<()> {
 
     // Snapshot old -> new. Deleted on any later failure (on_failure), kept on
     // success. Must be deleted while the top-level is still mounted, so it is
-    // registered on the failure stack BELOW the top-level unmount.
+    // registered on the failure stack BELOW the top-level unmount. -R (recursive)
+    // because we recreate the old root's nested subvolumes inside new below, so
+    // the failure cleanup must tear those down too.
     run_command(&PlannedCommand::new(
         "snapshot root subvolume for the new version",
         &[
@@ -638,9 +719,19 @@ fn live_execute(new_version: &str, quiet: bool) -> Result<()> {
             "btrfs",
             "subvolume",
             "delete",
+            "-R",
             &new_path.display().to_string(),
         ],
     ));
+
+    // btrfs snapshot is NOT recursive: each nested subvolume under the old root
+    // (e.g. /var/tmp, /var/lib/machines, /var/lib/portables -- systemd tmpfiles
+    // q/v rules create these as subvolumes on btrfs) became an empty stub dir in
+    // new. Recreate each with its contents by snapshotting the OLD nested subvol
+    // into new, so e.g. /var/tmp is a real 1777 subvolume again -> PrivateTmp=
+    // works -> dbus-broker/logind start. Done while the top-level is mounted (the
+    // nested subvols are addressable under old_path/new_path there).
+    recreate_nested_subvols(toplevel, &old_subvol, &new_subvol)?;
 
     // Mount the new snapshot as the seed root.
     let next_root = Path::new(NEXT_ROOT);
@@ -1035,6 +1126,31 @@ mod tests {
             parse_subvol_list(text),
             vec!["@archetype_2026.07.01-7", "@home"]
         );
+    }
+
+    #[test]
+    fn nested_subvols_under_returns_relative_paths_shallowest_first() {
+        // Whole-fs list: the old root, its nested subvols, plus unrelated ones.
+        let text = "ID 256 gen 9 top level 5 path @archetype_2026.07.01-7\n\
+                    ID 257 gen 9 top level 5 path @archetype_2026.07.01-7/var/tmp\n\
+                    ID 258 gen 9 top level 5 path @archetype_2026.07.01-7/var/lib/machines\n\
+                    ID 259 gen 9 top level 5 path @archetype_2026.07.01-7/var/lib/machines/vm\n\
+                    ID 260 gen 9 top level 5 path @home\n\
+                    ID 261 gen 9 top level 5 path @archetype_2026.06.01-1/var/tmp\n";
+        let got = nested_subvols_under(text, "@archetype_2026.07.01-7");
+        // relative to the parent; other roots (@home, the old -06.01) excluded;
+        // shallowest-first so var/lib/machines precedes var/lib/machines/vm.
+        assert_eq!(
+            got,
+            vec!["var/tmp", "var/lib/machines", "var/lib/machines/vm"]
+        );
+    }
+
+    #[test]
+    fn nested_subvols_under_empty_when_no_nesting() {
+        let text = "ID 256 gen 9 top level 5 path @archetype_2026.07.01-7\n\
+                    ID 257 gen 9 top level 5 path @home\n";
+        assert!(nested_subvols_under(text, "@archetype_2026.07.01-7").is_empty());
     }
 
     #[test]
