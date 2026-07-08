@@ -348,25 +348,34 @@ fn recreate_nested_subvols(toplevel: &Path, old_subvol: &str, new_subvol: &str) 
     for rel in nested {
         let old_nested = toplevel.join(old_subvol).join(&rel);
         let new_stub = toplevel.join(new_subvol).join(&rel);
-        // Remove the empty stub the snapshot left (rmdir: it must be empty; if a
-        // deeper nested subvol already recreated content under it, shallowest-
-        // first ordering ensures we process the parent first while still empty).
+        // Remove the stub the snapshot left. A non-recursive btrfs snapshot
+        // leaves each nested subvol as a plain EMPTY DIRECTORY (the snapshot
+        // barrier), so rmdir is the normal path and is silent. Only fall back to
+        // `btrfs subvolume delete` if rmdir fails (the stub is somehow a real
+        // subvolume). Ordering matters: doing the btrfs delete first made the
+        // btrfs binary print "ERROR: Not a Btrfs subvolume: Invalid argument" to
+        // stderr on every stub before the rmdir succeeded -- correct result,
+        // alarming noise. Shallowest-first ordering keeps the parent empty when
+        // we process it.
         if new_stub.exists() {
-            run_command(&PlannedCommand::new(
-                "remove nested-subvol stub in the new snapshot",
-                &[
-                    "btrfs",
-                    "subvolume",
-                    "delete",
-                    &new_stub.display().to_string(),
-                ],
-            ))
-            .or_else(|_| {
-                // Not a subvolume stub (plain empty dir) -> rmdir it instead.
-                std::fs::remove_dir(&new_stub).map_err(|e| {
-                    MizError::Other(format!("cannot remove stub {}: {e}", new_stub.display()))
-                })
-            })?;
+            if let Err(rmdir_err) = std::fs::remove_dir(&new_stub) {
+                run_command(&PlannedCommand::new(
+                    "remove nested-subvol stub (subvolume) in the new snapshot",
+                    &[
+                        "btrfs",
+                        "subvolume",
+                        "delete",
+                        &new_stub.display().to_string(),
+                    ],
+                ))
+                .map_err(|btrfs_err| {
+                    MizError::Other(format!(
+                        "cannot remove stub {}: rmdir failed ({rmdir_err}) and btrfs \
+                         subvolume delete failed ({btrfs_err})",
+                        new_stub.display()
+                    ))
+                })?;
+            }
         }
         run_command(&PlannedCommand::new(
             "recreate nested subvolume with contents (snapshot of old nested subvol)",
