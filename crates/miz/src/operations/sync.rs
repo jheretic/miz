@@ -386,10 +386,6 @@ fn sync_install(args: &Args, ctx: &mut Context, print_only: bool) -> Result<()> 
 
     let mut guard = TransGuard::new(&mut ctx.alpm, flags)?;
 
-    if !print_only {
-        crate::operations::progress::install(guard.alpm(), args.noprogressbar);
-    }
-
     if !args.targets.is_empty() {
         add_install_targets(guard.alpm(), &args.targets)?;
     }
@@ -437,6 +433,16 @@ fn sync_install(args: &Args, ctx: &mut Context, print_only: bool) -> Result<()> 
     if should_prompt(args.noconfirm) && !confirm(prompt) {
         guard.release()?;
         return Ok(());
+    }
+
+    // Register the progress bars ONLY now -- after the summary + confirm output.
+    // indicatif's MultiProgress anchors its cursor where it's created; building
+    // it earlier (at registration) meant the summary/confirm println!s scrolled
+    // that anchor, so bar redraws cleared the wrong lines and the prompt jumped
+    // to the top of the screen. Creating it here (right before the transaction
+    // draws) keeps its line accounting correct.
+    if !print_only {
+        crate::operations::progress::install(guard.alpm(), args.noprogressbar);
     }
 
     commit(guard.alpm())?;

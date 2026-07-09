@@ -17,7 +17,6 @@ pub fn run(args: Args, ctx: &mut Context) -> Result<()> {
     }
 
     let mut guard = TransGuard::new(&mut ctx.alpm, flags)?;
-    crate::operations::progress::install(guard.alpm(), args.noprogressbar);
     add_targets(guard.alpm(), &args.packages)?;
     prepare(guard.alpm())?;
 
@@ -34,6 +33,9 @@ pub fn run(args: Args, ctx: &mut Context) -> Result<()> {
         return Ok(());
     }
 
+    // Register progress bars only after the summary/confirm output, so indicatif
+    // anchors its cursor correctly (see the note in sync::sync_install).
+    crate::operations::progress::install(guard.alpm(), args.noprogressbar);
     commit(guard.alpm())?;
     guard.release()?;
     Ok(())

@@ -16,14 +16,21 @@ pub fn install(alpm: &Alpm, noprogressbar: bool) {
 }
 
 pub(crate) fn bar_style_op() -> ProgressStyle {
-    ProgressStyle::with_template("{prefix:>15} {bar:30} {percent:>3}% {msg}")
+    // Left-align the label at a fixed 12-col margin (was `>15`, which
+    // right-aligned short verbs like "loading" toward the screen centre). The
+    // package name follows the bar as {msg}, so the row reads
+    // "installing   [####] 42% <pkg>".
+    ProgressStyle::with_template("{prefix:<12} {bar:30} {percent:>3}% {msg}")
         .unwrap_or_else(|_| ProgressStyle::default_bar())
         .progress_chars("##-")
 }
 
 fn bar_style_dl() -> ProgressStyle {
+    // The prefix carries the "downloading <file>" descriptor (set in the dl cb),
+    // left-aligned at a fixed margin so bars line up at the left edge instead of
+    // being pushed toward the centre by the old `>30` right-alignment.
     ProgressStyle::with_template(
-        "{prefix:>30} {bytes:>10}/{total_bytes:<10} {bar:30} {percent:>3}% {bytes_per_sec}",
+        "{prefix:<32} {bytes:>10}/{total_bytes:<10} {bar:24} {percent:>3}% {bytes_per_sec}",
     )
     .unwrap_or_else(|_| ProgressStyle::default_bar())
     .progress_chars("##-")
@@ -142,7 +149,7 @@ fn install_dl_cb(alpm: &Alpm, mp: MultiProgress) {
             DownloadEvent::Init(_) => {
                 let pb = st.mp.add(ProgressBar::new(0));
                 pb.set_style(bar_style_dl());
-                pb.set_prefix(filename.to_string());
+                pb.set_prefix(format!("downloading {filename}"));
                 pb.enable_steady_tick(Duration::from_millis(120));
                 st.bars.insert(filename.to_string(), pb);
             }
