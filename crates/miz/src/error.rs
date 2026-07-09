@@ -3,13 +3,18 @@ use std::path::PathBuf;
 
 #[derive(thiserror::Error, Debug)]
 pub enum MizError {
-    #[error("alpm: {0}")]
+    // libalpm's own messages are already user-facing ("could not find package
+    // ...", "unable to lock database", etc.); the top-level handler prints the
+    // "error:" prefix, so an extra "alpm:" tag would only add noise.
+    #[error("{0}")]
     Alpm(#[from] alpm::Error),
-    #[error("io: {0}")]
+    // std::io::Error's Display is self-descriptive ("No such file or directory
+    // (os error 2)"); no "io:" tag needed after the "error:" prefix.
+    #[error("{0}")]
     Io(#[from] std::io::Error),
-    #[error("regex: {0}")]
+    #[error("invalid search pattern: {0}")]
     Regex(#[from] regex::Error),
-    #[error("{path}: {source}")]
+    #[error("could not parse config {path}: {source}")]
     Toml {
         path: PathBuf,
         #[source]
@@ -17,17 +22,17 @@ pub enum MizError {
     },
     #[error("package '{0}' was not found")]
     PackageNotFound(String),
-    #[error("not implemented")]
+    #[error("this operation is not implemented")]
     NotImplemented,
-    #[error("sysupdate: {0}")]
+    #[error("image update failed: {0}")]
     Sysupdate(String),
-    #[error("dbus: {0}")]
+    #[error("could not reach the image service over D-Bus: {0}")]
     Dbus(#[from] zbus::Error),
     #[error("dependency check failed")]
     Deptest,
     #[error("{0} database error(s) found")]
     DatabaseErrors(usize),
-    #[error("operation conflict: {0}")]
+    #[error("conflicting options: {0}")]
     BadArgs(String),
     #[error("{0}")]
     Other(String),
