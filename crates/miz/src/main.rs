@@ -3,6 +3,7 @@ mod config;
 mod error;
 mod exit;
 mod operations;
+mod style;
 
 use clap::Parser;
 use cli::{Cli, Operation};
@@ -74,7 +75,12 @@ fn main() -> ExitCode {
                 e,
                 error::MizError::Deptest | error::MizError::DatabaseErrors(_)
             ) {
-                eprintln!("error: {e}");
+                // Errors print to stderr; resolve the palette against stderr's
+                // TTY-ness. Config color isn't available on the failure path
+                // (the error may BE a config-load failure), so honor NO_COLOR +
+                // TTY with color defaulted on -- matching the shipped default.
+                let palette = style::Palette::resolve_stderr(true);
+                eprintln!("{} {e}", palette.error.apply_to("error:"));
             }
             ExitCode::from(e.exit_code() as u8)
         }

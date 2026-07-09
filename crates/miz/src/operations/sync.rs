@@ -23,7 +23,10 @@ pub fn run(args: Args, ctx: &mut Context) -> Result<()> {
         // per db file with the repo name). Register callbacks BEFORE update so
         // the fetch renders; the &Alpm borrow ends before syncdbs_mut().
         if !args.quiet {
-            eprintln!(":: Synchronizing package databases...");
+            eprintln!(
+                "{} Synchronizing package databases...",
+                ctx.palette.status.apply_to("::")
+            );
         }
         crate::operations::progress::install(&ctx.alpm, args.noprogressbar);
         let dbs = ctx.alpm.syncdbs_mut();
@@ -118,7 +121,10 @@ fn sync_list(args: &Args, ctx: &Context) -> Result<()> {
             match ctx.alpm.syncdbs().iter().find(|d| d.name() == name) {
                 Some(db) => out.push(db),
                 None => {
-                    eprintln!("error: repository '{name}' was not found");
+                    eprintln!(
+                        "{} repository '{name}' was not found",
+                        ctx.palette.error.apply_to("error:")
+                    );
                     return Err(MizError::PackageNotFound(name.clone()));
                 }
             }
@@ -174,7 +180,10 @@ fn sync_groups(args: &Args, ctx: &Context) -> Result<()> {
             }
         }
         if !found {
-            eprintln!("error: group '{name}' was not found");
+            eprintln!(
+                "{} group '{name}' was not found",
+                ctx.palette.error.apply_to("error:")
+            );
             any_missing = true;
         }
     }
@@ -211,7 +220,10 @@ fn sync_info(args: &Args, ctx: &Context) -> Result<()> {
             }
         }
         if !found {
-            eprintln!("error: package '{name}' was not found");
+            eprintln!(
+                "{} package '{name}' was not found",
+                ctx.palette.error.apply_to("error:")
+            );
             missing = true;
         }
     }
@@ -412,7 +424,10 @@ fn sync_install(args: &Args, ctx: &mut Context, print_only: bool) -> Result<()> 
             println!("{line}");
         }
         if let Err(e) = guard.release() {
-            eprintln!("warning: trans_release failed after --print: {e}");
+            eprintln!(
+                "{} trans_release failed after --print: {e}",
+                ctx.palette.warning.apply_to("warning:")
+            );
         }
         return Ok(());
     }
@@ -423,7 +438,7 @@ fn sync_install(args: &Args, ctx: &mut Context, print_only: bool) -> Result<()> 
         return Ok(());
     }
 
-    print_summary(&targets);
+    print_summary(&targets, &ctx.palette);
 
     let prompt = if args.downloadonly {
         "Proceed with download? [Y/n] "

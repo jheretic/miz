@@ -27,7 +27,7 @@ pub fn run(args: Args, ctx: &mut Context) -> Result<()> {
         return Ok(());
     }
 
-    print_summary(&targets);
+    print_summary(&targets, &ctx.palette);
 
     if should_prompt(args.noconfirm) && !confirm("Proceed with installation? [Y/n] ") {
         guard.release()?;

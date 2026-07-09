@@ -236,18 +236,21 @@ pub(crate) fn format_print_line(pkg: &Package, format: Option<&str>) -> String {
     }
 }
 
-pub(crate) fn print_summary(targets: &[(String, String)]) {
+pub(crate) fn print_summary(targets: &[(String, String)], palette: &crate::style::Palette) {
     let total = targets.len();
     eprintln!();
-    eprintln!("Packages ({total}):");
+    eprintln!(
+        "{}",
+        palette.header.apply_to(format!("Packages ({total}):"))
+    );
     let mut buf = String::new();
     for (name, version) in targets {
         if !buf.is_empty() {
             buf.push(' ');
         }
-        buf.push_str(name);
+        buf.push_str(&palette.package.apply_to(name).to_string());
         buf.push('-');
-        buf.push_str(version);
+        buf.push_str(&palette.version.apply_to(version).to_string());
     }
     eprintln!("{buf}");
     eprintln!();

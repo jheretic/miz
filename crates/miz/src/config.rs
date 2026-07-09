@@ -1,5 +1,6 @@
 use crate::cli::Cli;
 use crate::error::{MizError, Result};
+use crate::style::Palette;
 use alpm::{Alpm, Depend, LogLevel, SigLevel, Usage};
 use miz_config::{MizConfig, Options, Repository};
 use std::fs;
@@ -13,6 +14,9 @@ pub struct Context {
     /// image db is a separate grouped tree (not an alpm localdb), so query
     /// operations read it via `operations::imagedb` and union the results.
     pub image_db: Option<PathBuf>,
+    /// Resolved terminal color styling for this run (from `[options] color` +
+    /// NO_COLOR + TTY detection). Read by the print sites.
+    pub palette: Palette,
 }
 
 /// User override layer. Optional: absent means "vendor config as-is".
@@ -267,6 +271,7 @@ fn assemble_context(
         alpm,
         root,
         image_db: image_db.map(Path::to_path_buf),
+        palette: Palette::resolve(conf.options.color),
     })
 }
 
