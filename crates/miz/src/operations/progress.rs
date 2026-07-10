@@ -91,10 +91,16 @@ fn install_progress_cb(alpm: &Alpm, mp: MultiProgress) {
         state,
         |kind, pkg, percent, _n, _current, st: &mut OpState| {
             let percent = percent.clamp(0, 100) as u64;
+            // A genuinely new bar is needed only when the (kind, pkg) pair
+            // changes. alpm fires this callback repeatedly for one package --
+            // including several times at 100% -- so `last_kind`/`last_pkg` must
+            // survive completion: clearing them on 100% made every extra 100%
+            // call look "new" and spawn a fresh (instantly-finished) bar, which
+            // is the duplicate-bars-per-package bug and the display churn.
             let new_bar = st.last_kind != Some(kind) || st.last_pkg != pkg;
             if new_bar {
                 if let Some(prev) = st.bar.take() {
-                    prev.finish_and_clear();
+                    prev.finish();
                 }
                 let pb = st.mp.add(ProgressBar::new(100));
                 pb.set_style(bar_style_op());
@@ -107,10 +113,11 @@ fn install_progress_cb(alpm: &Alpm, mp: MultiProgress) {
             if let Some(pb) = st.bar.as_ref() {
                 pb.set_position(percent);
                 if percent >= 100 {
+                    // Finish the bar but retain last_kind/last_pkg so repeat
+                    // 100% callbacks for this same package are no-ops (new_bar
+                    // stays false), not new bars.
                     pb.finish();
                     st.bar = None;
-                    st.last_kind = None;
-                    st.last_pkg.clear();
                 }
             }
         },
