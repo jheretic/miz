@@ -83,11 +83,11 @@ fn dash_q_localdb_shadows_image_db() {
 
 #[test]
 #[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
-fn dash_qi_on_image_only_package_is_not_found() {
+fn dash_qi_on_image_only_package_shows_info() {
     let root = make_test_root();
     let conf = set_image_db(&root, &image_db_fixture());
-    // -Qi needs Pkg metadata the image db lacks, so an image-only name must NOT
-    // resolve to a bogus line -- it is reported not found.
+    // -Qi renders the desc fields the image db carries: an image-only package
+    // resolves to a full info block, on par with a localdb package.
     miz()
         .args([
             "--root",
@@ -98,8 +98,53 @@ fn dash_qi_on_image_only_package_is_not_found() {
             "foo",
         ])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("was not found"));
+        .success()
+        .stdout(
+            predicate::str::contains("Name")
+                .and(predicate::str::contains("foo"))
+                .and(predicate::str::contains("A foo package"))
+                .and(predicate::str::contains("glibc")),
+        );
+}
+
+#[test]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+fn dash_ql_lists_image_package_files() {
+    let root = make_test_root();
+    let conf = set_image_db(&root, &image_db_fixture());
+    // -Ql lists the files the image `files` db entry records.
+    miz()
+        .args([
+            "--root",
+            root.path.to_str().unwrap(),
+            "--config",
+            conf.to_str().unwrap(),
+            "-Ql",
+            "foo",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("foo usr/bin/foo"));
+}
+
+#[test]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+fn dash_qo_finds_image_package_owning_file() {
+    let root = make_test_root();
+    let conf = set_image_db(&root, &image_db_fixture());
+    // -Qo resolves an owned path to its image package.
+    miz()
+        .args([
+            "--root",
+            root.path.to_str().unwrap(),
+            "--config",
+            conf.to_str().unwrap(),
+            "-Qo",
+            "/usr/bin/foo",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("owned by foo 1.2.3-1"));
 }
 
 #[test]
@@ -107,6 +152,7 @@ fn dash_qi_on_image_only_package_is_not_found() {
 fn dash_qs_searches_image_db() {
     let root = make_test_root();
     let conf = set_image_db(&root, &image_db_fixture());
+    // -Qs now prints the description line for an image hit, matching localdb.
     miz()
         .args([
             "--root",
@@ -119,6 +165,30 @@ fn dash_qs_searches_image_db() {
         .assert()
         .success()
         .stdout(predicate::str::contains("image/baz 2.0-3"));
+}
+
+#[test]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+fn dash_qs_matches_image_description() {
+    let root = make_test_root();
+    let conf = set_image_db(&root, &image_db_fixture());
+    // Searching a term only in the DESC field matches the image package and the
+    // description is printed on the following line.
+    miz()
+        .args([
+            "--root",
+            root.path.to_str().unwrap(),
+            "--config",
+            conf.to_str().unwrap(),
+            "-Qs",
+            "foo package",
+        ])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("image/foo 1.2.3-1")
+                .and(predicate::str::contains("A foo package")),
+        );
 }
 
 #[test]
@@ -138,6 +208,86 @@ fn dash_q_unknown_name_still_errors_with_image_db() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("was not found"));
+}
+
+#[test]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+fn dash_qd_lists_image_dependency_packages() {
+    let root = make_test_root();
+    let conf = set_image_db(&root, &image_db_fixture());
+    // baz is %REASON% 1 (a dependency); foo is explicit. -Qd keeps baz, drops foo.
+    miz()
+        .args([
+            "--root",
+            root.path.to_str().unwrap(),
+            "--config",
+            conf.to_str().unwrap(),
+            "-Qd",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("baz 2.0-3").and(predicate::str::contains("foo").not()));
+}
+
+#[test]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+fn dash_qe_lists_image_explicit_packages() {
+    let root = make_test_root();
+    let conf = set_image_db(&root, &image_db_fixture());
+    // -Qe keeps the explicitly-installed foo, drops the dependency baz.
+    miz()
+        .args([
+            "--root",
+            root.path.to_str().unwrap(),
+            "--config",
+            conf.to_str().unwrap(),
+            "-Qe",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("foo 1.2.3-1").and(predicate::str::contains("baz").not()));
+}
+
+#[test]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+fn dash_qt_excludes_required_image_package() {
+    let root = make_test_root();
+    let conf = set_image_db(&root, &image_db_fixture());
+    // foo depends on glibc; nothing installed depends on foo, and nothing
+    // requires baz's provided libbaz.so, so both foo and baz are unrequired.
+    // (glibc is not in the image db here, so it does not appear.)
+    miz()
+        .args([
+            "--root",
+            root.path.to_str().unwrap(),
+            "--config",
+            conf.to_str().unwrap(),
+            "-Qt",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("foo 1.2.3-1").and(predicate::str::contains("baz 2.0-3")));
+}
+
+#[test]
+#[ignore = "requires libalpm at runtime; run with `cargo test -- --ignored` after `export MIZ_HAS_ALPM=1`"]
+fn dash_qk_checks_image_package_files() {
+    let root = make_test_root();
+    let conf = set_image_db(&root, &image_db_fixture());
+    // foo owns usr/bin/foo, usr/share/doc/foo/, usr/share/doc/foo/README under
+    // the root -- none created here, so all are reported missing and -Qk fails.
+    miz()
+        .args([
+            "--root",
+            root.path.to_str().unwrap(),
+            "--config",
+            conf.to_str().unwrap(),
+            "-Qk",
+            "foo",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("foo: 3 total files, 3 missing files"));
 }
 
 #[test]

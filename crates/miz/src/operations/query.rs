@@ -24,56 +24,31 @@ pub fn run(args: Args, ctx: &Context) -> Result<()> {
     query_local(&args, ctx)
 }
 
-/// Package names present in the baked-in `/usr` image db but NOT in the mutable
-/// `/var` localdb, as `(name, version)`. The localdb wins on a name collision
-/// (a layered package shadows its image version). Empty when no image db is
-/// configured. Only consulted by the plain-listing query paths -- see
-/// [`image_db_listable`].
-fn image_db_extra(ctx: &Context) -> Vec<(String, String)> {
-    let Some(path) = ctx.image_db.as_deref() else {
-        return Vec::new();
-    };
-    let pkgs = match crate::operations::imagedb::installed_packages(path) {
-        Ok(p) => p,
-        Err(_) => return Vec::new(),
-    };
-    pkgs.into_iter()
-        .filter(|(name, _)| ctx.alpm.localdb().pkg(name.as_bytes()).is_err())
+/// The full baked-in /usr image packages (all desc + files metadata). Empty
+/// when no image db is configured. Call sites decide whether to skip
+/// localdb-shadowed names; this returns the raw set so `-Qi <name>` on an image
+/// package that is ALSO layered still resolves.
+fn image_packages(ctx: &Context) -> Vec<crate::operations::imagedb::ImagePackage> {
+    ctx.image_db
+        .as_deref()
+        .map(crate::operations::imagedb::all_packages)
+        .unwrap_or_default()
+}
+
+/// The image packages NOT shadowed by a localdb (overlay) package -- the set to
+/// UNION into whole-system listings/filters so a layered package is reported
+/// once (from the localdb, which has richer alpm metadata).
+fn image_packages_unshadowed(ctx: &Context) -> Vec<crate::operations::imagedb::ImagePackage> {
+    image_packages(ctx)
+        .into_iter()
+        .filter(|p| ctx.alpm.localdb().pkg(p.name.as_bytes()).is_err())
         .collect()
 }
 
-/// Whether the plain package listing should include image-db-only packages.
-/// The image db is a grouped desc tree, not an alpm localdb, so we only have
-/// name+version -- no reason/deps/files/upgrade metadata. Restrict the union to
-/// the plain list (and exact-name lookup): any flag that needs `Pkg` metadata
-/// (`-Qe/-Qd/-Qt/-Qm/-Qn/-Qu`, and the detail forms `-Qi/-Ql/-Qk/-Qc`) applies
-/// only to the mutable localdb, where that metadata exists.
-fn image_db_listable(args: &Args) -> bool {
-    !args.deps
-        && !args.explicit
-        && !args.foreign
-        && !args.native
-        && !args.unrequired
-        && !args.upgrades
-        && args.info == 0
-        && !args.list
-        && args.check == 0
-        && !args.changelog
-}
-
-/// Whether a targeted `-Qi <name>` should fall back to the image db. `-Qi` (or
-/// `-Qii`) with no other detail flag: the image `desc` carries enough to render
-/// a package-info block for a baked-in /usr package. `-Ql`/`-Qk`/`-Qc` are
-/// excluded (they need files/scriptlet data the image db doesn't provide).
-fn image_info_wanted(args: &Args) -> bool {
-    args.info > 0 && !args.list && args.check == 0 && !args.changelog
-}
-
-/// Render a package-info block for a baked-in /usr (image-db) package. Only the
-/// fields the image `desc` stores are shown; fields an alpm `Pkg` would add but
-/// the image db lacks (reverse-deps, install date/reason, validation) are
-/// omitted rather than faked. Layout mirrors [`print_info`].
-fn print_image_info(pkg: &crate::operations::imagedb::ImagePackage) {
+/// Render a package-info block for a baked-in /usr (image-db) package. Layout
+/// mirrors [`print_info`]. Fields the image db genuinely lacks (reverse-deps,
+/// validation) are omitted rather than faked.
+fn print_image_info(args: &Args, pkg: &crate::operations::imagedb::ImagePackage) {
     let label = |k: &str, v: &str| println!("{:<19}: {}", k, v);
     let none = |v: &[String]| {
         if v.is_empty() {
@@ -91,10 +66,44 @@ fn print_image_info(pkg: &crate::operations::imagedb::ImagePackage) {
     label("Groups", &none(&pkg.groups));
     label("Provides", &none(&pkg.provides));
     label("Depends On", &none(&pkg.depends));
+    // Optional deps: one per line after the first, aligned under the value
+    // column, matching print_info's layout.
+    if pkg.optdepends.is_empty() {
+        label("Optional Deps", "None");
+    } else {
+        label("Optional Deps", &pkg.optdepends.join("\n                     "));
+    }
+    label("Conflicts With", &none(&pkg.conflicts));
+    label("Replaces", &none(&pkg.replaces));
     if let Some(sz) = pkg.isize {
         label("Installed Size", &format_size(sz));
     }
-    label("Install Reason", "Shipped in the base image (/usr)");
+    label("Packager", pkg.packager.as_deref().unwrap_or("None"));
+    if let Some(bd) = pkg.build_date {
+        label("Build Date", &format_date(bd));
+    }
+    if let Some(id) = pkg.install_date {
+        label("Install Date", &format_date(id));
+    }
+    label(
+        "Install Reason",
+        if pkg.explicit {
+            "Explicitly installed (base image /usr)"
+        } else {
+            "Installed as a dependency (base image /usr)"
+        },
+    );
+    if args.info >= 2 {
+        // -Qii: backup files, matching print_info's `path\thash` layout.
+        if pkg.backup.is_empty() {
+            label("Backup Files", "None");
+        } else {
+            println!("Backup Files       :");
+            for (path, hash) in &pkg.backup {
+                println!("{path}\t{hash}");
+            }
+        }
+    }
     println!();
 }
 
@@ -103,66 +112,7 @@ fn query_local(args: &Args, ctx: &Context) -> Result<()> {
     let mut missing = false;
     let mut check_failed = false;
 
-    if !args.packages.is_empty()
-        && !args.deps
-        && !args.explicit
-        && !args.foreign
-        && !args.native
-        && !args.unrequired
-        && !args.upgrades
-    {
-        // Image-db fallback for a targeted lookup. Plain `-Q <name>` prints
-        // name/version (image_db_listable); `-Qi <name>` renders the desc
-        // fields the image db carries (image_info_wanted). The other detail
-        // modes (-Ql/-Qk/-Qc) need Pkg data the image db lacks, so an image-only
-        // name under those falls through to "not found".
-        let want_list = image_db_listable(args);
-        let want_info = image_info_wanted(args);
-        let image_extra = if want_list {
-            image_db_extra(ctx)
-        } else {
-            Vec::new()
-        };
-        for name in &args.packages {
-            match alpm.localdb().pkg(name.as_bytes()) {
-                Ok(pkg) => emit_pkg(args, ctx, pkg, &mut check_failed)?,
-                Err(_) => {
-                    if want_list {
-                        if let Some((n, v)) = image_extra.iter().find(|(n, _)| n == name) {
-                            if args.quiet {
-                                println!("{n}");
-                            } else {
-                                println!("{n} {v}");
-                            }
-                            continue;
-                        }
-                    }
-                    if want_info {
-                        if let Some(info) = ctx
-                            .image_db
-                            .as_deref()
-                            .and_then(|db| crate::operations::imagedb::package_info(db, name))
-                        {
-                            print_image_info(&info);
-                            continue;
-                        }
-                    }
-                    eprintln!("error: package '{name}' was not found");
-                    missing = true;
-                }
-            }
-        }
-        if missing {
-            return Err(MizError::PackageNotFound(args.packages.join(", ")));
-        }
-        if check_failed {
-            return Err(MizError::Other(
-                "package files are missing or altered".to_string(),
-            ));
-        }
-        return Ok(());
-    }
-
+    // Sync-db package names, for the -Qm/-Qn (foreign/native) and -Qu paths.
     let foreign_names: HashSet<String> = if args.foreign || args.native {
         let mut set = HashSet::new();
         for db in alpm.syncdbs() {
@@ -181,6 +131,20 @@ fn query_local(args: &Args, ctx: &Context) -> Result<()> {
         Some(args.packages.iter().map(|s| s.as_str()).collect())
     };
 
+    // Image packages the localdb doesn't shadow, unioned into every path so the
+    // baked-in /usr packages get the SAME query support as overlay packages.
+    // (-Qu is handled per-package in the loop below: image packages update via
+    // the whole /usr A/B image, never as a per-package sync upgrade.)
+    let image_pkgs = image_packages_unshadowed(ctx);
+    // Reverse-dependency index over the MERGED set (localdb + image), by name
+    // and by every provided name, for -Qt (unrequired). Unversioned (name +
+    // provides), which is sufficient for the pinned base image.
+    let required_names: HashSet<String> = if args.unrequired {
+        merged_required_names(ctx, &image_pkgs)
+    } else {
+        HashSet::new()
+    };
+
     for pkg in alpm.localdb().pkgs() {
         if args.deps && pkg.reason() != PackageReason::Depend {
             continue;
@@ -189,10 +153,12 @@ fn query_local(args: &Args, ctx: &Context) -> Result<()> {
             continue;
         }
         if args.unrequired {
-            if !pkg.required_by().is_empty() {
-                continue;
-            }
-            if !pkg.optional_for().is_empty() {
+            // Use the merged (localdb + image) reverse-dep set, not alpm's
+            // required_by/optional_for, which cannot see image packages that
+            // depend on this one.
+            let provides: Vec<String> =
+                pkg.provides().iter().map(|p| p.to_string()).collect();
+            if name_or_provides_required(pkg.name(), &provides, &required_names) {
                 continue;
             }
         }
@@ -215,35 +181,45 @@ fn query_local(args: &Args, ctx: &Context) -> Result<()> {
         emit_pkg(args, ctx, pkg, &mut check_failed)?;
     }
 
-    // Union in the baked-in /usr image-db packages that the mutable localdb
-    // doesn't shadow, so a plain `-Q`/`-Q <name>` lists the whole system, not
-    // just the layered /var packages. Gated to plain listing (image_db_listable)
-    // because the image db carries only name+version.
-    if image_db_listable(args) {
-        for (name, version) in image_db_extra(ctx) {
-            if let Some(ts) = target_set.as_ref() {
-                if !ts.contains(name.as_str()) {
-                    continue;
-                }
-            }
-            if args.quiet {
-                println!("{name}");
-            } else {
-                println!("{name} {version}");
+    // The image (/usr) packages, filtered by the same flags and emitted with the
+    // same detail modes as localdb packages.
+    for pkg in &image_pkgs {
+        // -Qu: image packages update via the whole /usr A/B image (miz -Iu),
+        // never as a per-package sync upgrade, so none is ever a candidate.
+        // They still count as "installed" for the not-found check below.
+        if args.upgrades {
+            continue;
+        }
+        if args.deps && pkg.explicit {
+            continue; // -Qd: dependencies only
+        }
+        if args.explicit && !pkg.explicit {
+            continue; // -Qe: explicit only
+        }
+        if args.unrequired && name_or_provides_required(&pkg.name, &pkg.provides, &required_names) {
+            continue;
+        }
+        // Foreign/native is decided by sync-db presence, exactly as for a
+        // localdb package: -Qm (foreign) keeps names absent from every sync db,
+        // -Qn (native) keeps names present in one.
+        if args.foreign && foreign_names.contains(&pkg.name) {
+            continue;
+        }
+        if args.native && !foreign_names.contains(&pkg.name) {
+            continue;
+        }
+        if let Some(ts) = target_set.as_ref() {
+            if !ts.contains(pkg.name.as_str()) {
+                continue;
             }
         }
+        emit_image_pkg(args, ctx, pkg, &mut check_failed)?;
     }
 
     if let Some(ts) = target_set.as_ref() {
-        // Only parse the image db when it can satisfy the query (plain listing).
-        let image_extra = if image_db_listable(args) {
-            image_db_extra(ctx)
-        } else {
-            Vec::new()
-        };
         for name in ts {
             let in_local = alpm.localdb().pkg(name.as_bytes()).is_ok();
-            let in_image = image_extra.iter().any(|(n, _)| n == name);
+            let in_image = image_pkgs.iter().any(|p| p.name == *name);
             if !in_local && !in_image {
                 eprintln!("error: package '{name}' was not found");
                 missing = true;
@@ -275,6 +251,142 @@ fn emit_pkg(args: &Args, ctx: &Context, pkg: &Pkg, check_failed: &mut bool) -> R
         return print_info(args, pkg);
     }
     print_name_version(args, pkg);
+    Ok(())
+}
+
+/// Detail-mode dispatch for a baked-in /usr (image) package, mirroring
+/// [`emit_pkg`] for a localdb `Pkg`.
+fn emit_image_pkg(
+    args: &Args,
+    ctx: &Context,
+    pkg: &crate::operations::imagedb::ImagePackage,
+    check_failed: &mut bool,
+) -> Result<()> {
+    if args.changelog {
+        // pacman's localdb stores no changelog for ANY package; the image db is
+        // no different. Match the localdb "no changelog" behaviour exactly.
+        eprintln!("error: no changelog available for '{}'", pkg.name);
+        return Err(MizError::Other(format!("no changelog for {}", pkg.name)));
+    }
+    if args.check > 0 {
+        return print_image_check(args, ctx, pkg, check_failed);
+    }
+    if args.list {
+        print_image_files(args, pkg);
+        return Ok(());
+    }
+    if args.info > 0 {
+        print_image_info(args, pkg);
+        return Ok(());
+    }
+    if args.quiet {
+        println!("{}", pkg.name);
+    } else {
+        println!("{} {}", pkg.name, pkg.version);
+    }
+    Ok(())
+}
+
+/// Every name any installed package (localdb + image) requires -- both hard
+/// `depends` and `optdepends` -- for the -Qt (unrequired) filter. Unversioned:
+/// a package is "required" if its name, or a name it provides, appears here.
+/// `image_pkgs` is the unshadowed image set already computed by the caller
+/// (avoids re-reading the image db).
+fn merged_required_names(
+    ctx: &Context,
+    image_pkgs: &[crate::operations::imagedb::ImagePackage],
+) -> HashSet<String> {
+    let mut set = HashSet::new();
+    for pkg in ctx.alpm.localdb().pkgs() {
+        for dep in pkg.depends() {
+            set.insert(dep_bare_name(&dep.to_string()));
+        }
+        for opt in pkg.optdepends() {
+            set.insert(dep_bare_name(&opt.to_string()));
+        }
+    }
+    for pkg in image_pkgs {
+        for dep in &pkg.depends {
+            set.insert(dep_bare_name(dep));
+        }
+        for opt in &pkg.optdepends {
+            set.insert(dep_bare_name(opt));
+        }
+    }
+    set
+}
+
+/// The bare package name from a dependency, optional-dependency, or provision
+/// token: drop an optdepends `: description` suffix, then any version
+/// constraint. "foo>=1.2" -> "foo"; "bar: needed for X" -> "bar";
+/// "libfoo.so=1-64" -> "libfoo.so".
+fn dep_bare_name(token: &str) -> String {
+    let no_desc = token.split(':').next().unwrap_or(token);
+    no_desc
+        .split(['<', '>', '='])
+        .next()
+        .unwrap_or(no_desc)
+        .trim()
+        .to_string()
+}
+
+/// Whether a package (its own name or any name it provides) is required by
+/// something installed, i.e. appears in `required_names`.
+fn name_or_provides_required(
+    name: &str,
+    provides: &[String],
+    required_names: &HashSet<String>,
+) -> bool {
+    required_names.contains(name)
+        || provides
+            .iter()
+            .any(|p| required_names.contains(&dep_bare_name(p)))
+}
+
+/// `-Ql` for an image package: list its owned files.
+fn print_image_files(args: &Args, pkg: &crate::operations::imagedb::ImagePackage) {
+    for file in &pkg.files {
+        if args.quiet {
+            println!("{file}");
+        } else {
+            println!("{} {}", pkg.name, file);
+        }
+    }
+}
+
+/// `-Qk` for an image package: check its owned files against the live root,
+/// mirroring [`print_check`]. `-Qkk` (check>=2) additionally cannot verify
+/// size/mode from the image `files` list (pacman's `files` db carries only
+/// paths + backup hashes, not per-file size/mode), so only existence is checked
+/// -- which is also exactly what a size/mode-less localdb check would report.
+fn print_image_check(
+    args: &Args,
+    ctx: &Context,
+    pkg: &crate::operations::imagedb::ImagePackage,
+    check_failed: &mut bool,
+) -> Result<()> {
+    let mut total = 0usize;
+    let mut missing = 0usize;
+    for rel in &pkg.files {
+        total += 1;
+        let path = resolve_file_path(&ctx.root, rel);
+        if std::fs::symlink_metadata(&path).is_err() {
+            missing += 1;
+            if !args.quiet {
+                eprintln!("{}: /{} (Missing file)", pkg.name, rel);
+            }
+        }
+    }
+    let mut line = format!("{}: {total} total files, {missing} missing files", pkg.name);
+    if args.check >= 2 {
+        // The image `files` db carries no per-file size/mode, so alteration
+        // cannot be detected; report 0 altered, matching the localdb -Qkk line.
+        line.push_str(", 0 altered files");
+    }
+    println!("{line}");
+    if missing > 0 {
+        *check_failed = true;
+    }
     Ok(())
 }
 
@@ -525,7 +637,10 @@ pub(crate) fn format_date(secs: i64) -> String {
 fn chrono_like(secs: i64) -> String {
     let days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     let mut secs = secs;
-    if secs < 0 {
+    // Reject out-of-range values (negative, or beyond year 9999) rather than
+    // looping ~292 billion times. Image-db timestamps are parsed from untrusted
+    // text, so a bogus value must not hang -Qi.
+    if !(0..=253_402_300_799).contains(&secs) {
         return secs.to_string();
     }
     let h = ((secs / 3600) % 24) as u32;
@@ -608,16 +723,23 @@ fn query_search(args: &Args, ctx: &Context, pattern: &str) -> Result<()> {
             println!("    {desc}");
         }
     }
-    // Also search the baked-in /usr image db (name only -- no desc in that
-    // format). localdb-shadowed names are already excluded by image_db_extra.
-    for (name, version) in image_db_extra(ctx) {
-        if !re.is_match(&name) {
+    // Also search the baked-in /usr image packages (matching name OR
+    // description, like the localdb arm). Shadowed names are excluded so a
+    // layered package is reported once, from the localdb arm above.
+    for pkg in image_packages_unshadowed(ctx) {
+        let desc = pkg.desc.as_deref().unwrap_or("");
+        let name_match = re.is_match(&pkg.name);
+        let desc_match = re.is_match(desc);
+        if !(name_match || desc_match) {
             continue;
         }
         if args.quiet {
-            println!("{name}");
+            println!("{}", pkg.name);
         } else {
-            println!("image/{name} {version}");
+            println!("image/{} {}", pkg.name, pkg.version);
+            if !desc.is_empty() {
+                println!("    {desc}");
+            }
         }
     }
     Ok(())
@@ -633,6 +755,24 @@ fn query_owns(ctx: &Context, path: &str) -> Result<()> {
                 println!("{} is owned by {} {}", path, pkg.name(), pkg.version());
                 found = true;
             }
+        }
+    }
+    // Also search the baked-in /usr image packages. A localdb (overlay) package
+    // shadows its image version, so skip image packages whose name is in localdb
+    // to avoid a duplicate "owned by" line.
+    for pkg in image_packages(ctx) {
+        if ctx.alpm.localdb().pkg(pkg.name.as_bytes()).is_ok() {
+            continue;
+        }
+        // `needle` has its trailing slash stripped; image `files` keep it on
+        // directory entries, so trim both sides before comparing.
+        if pkg
+            .files
+            .iter()
+            .any(|f| f.trim_end_matches('/').as_bytes() == needle_bytes)
+        {
+            println!("{} is owned by {} {}", path, pkg.name, pkg.version);
+            found = true;
         }
     }
     if !found {
@@ -703,4 +843,50 @@ fn query_groups(args: &Args, ctx: &Context) -> Result<()> {
         return Err(MizError::PackageNotFound(args.packages.join(", ")));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dep_bare_name_strips_version_and_description() {
+        assert_eq!(dep_bare_name("foo"), "foo");
+        assert_eq!(dep_bare_name("foo>=1.2"), "foo");
+        assert_eq!(dep_bare_name("foo<3"), "foo");
+        assert_eq!(dep_bare_name("foo=1-1"), "foo");
+        assert_eq!(dep_bare_name("bar: needed for X"), "bar");
+        assert_eq!(dep_bare_name("baz: optional >= 2"), "baz");
+        assert_eq!(dep_bare_name("libfoo.so=1-64"), "libfoo.so");
+    }
+
+    #[test]
+    fn name_or_provides_required_matches_name_or_provision() {
+        let mut req = HashSet::new();
+        req.insert("wanted".to_string());
+        req.insert("libz.so".to_string());
+        // matched by its own name
+        assert!(name_or_provides_required("wanted", &[], &req));
+        // matched by a provided name (version stripped)
+        assert!(name_or_provides_required(
+            "other",
+            &["libz.so=1-64".to_string()],
+            &req
+        ));
+        // no match
+        assert!(!name_or_provides_required(
+            "orphan",
+            &["unrelated".to_string()],
+            &req
+        ));
+    }
+
+    #[test]
+    fn chrono_like_rejects_out_of_range() {
+        // negative and absurd values are echoed verbatim, not looped over
+        assert_eq!(chrono_like(-5), "-5");
+        assert_eq!(chrono_like(i64::MAX), i64::MAX.to_string());
+        // a normal value formats
+        assert!(chrono_like(0).starts_with("1970-01-01"));
+    }
 }

@@ -13,6 +13,3 @@ bar
 
 %DEPENDS%
 glibc
-
-%FILES%
-usr/bin/foo
