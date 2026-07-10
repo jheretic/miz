@@ -28,7 +28,7 @@ pub fn run(args: Args, ctx: &mut Context) -> Result<()> {
                 ctx.palette.status.apply_to("::")
             );
         }
-        crate::operations::progress::install(&ctx.alpm, args.noprogressbar);
+        crate::operations::progress::install(&ctx.alpm, args.noprogressbar, &ctx.palette);
         let dbs = ctx.alpm.syncdbs_mut();
         let up_to_date = dbs.update(force)?;
         if !args.quiet {
@@ -457,7 +457,7 @@ fn sync_install(args: &Args, ctx: &mut Context, print_only: bool) -> Result<()> 
     // to the top of the screen. Creating it here (right before the transaction
     // draws) keeps its line accounting correct.
     if !print_only {
-        crate::operations::progress::install(guard.alpm(), args.noprogressbar);
+        crate::operations::progress::install(guard.alpm(), args.noprogressbar, &ctx.palette);
     }
 
     commit(guard.alpm())?;

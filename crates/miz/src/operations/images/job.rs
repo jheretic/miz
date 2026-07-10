@@ -10,7 +10,7 @@
 
 use crate::error::{MizError, Result};
 use crate::operations::images::client::JobProxyBlocking;
-use crate::operations::progress::bar_style_op;
+use crate::operations::progress::bar_style_job;
 use indicatif::ProgressBar;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -20,13 +20,15 @@ use zbus::zvariant::OwnedObjectPath;
 /// Wait for job `id` (at `path`) to finish, rendering a progress bar unless
 /// `no_bar`. Returns Ok(()) on status 0, else a `Sysupdate` error describing
 /// the failure. `removed` is a pre-subscribed `JobRemoved` signal iterator
-/// (subscribed BEFORE the Acquire/Install call to avoid a race window).
+/// (subscribed BEFORE the Acquire/Install call to avoid a race window). `label`
+/// is the left-margin verb shown on the bar (e.g. "acquiring", "installing").
 pub fn wait<I>(
     conn: &Connection,
     path: &OwnedObjectPath,
     id: u64,
     no_bar: bool,
     removed: I,
+    label: &str,
 ) -> Result<()>
 where
     I: Iterator<Item = (u64, i32)> + Send + 'static,
@@ -49,7 +51,12 @@ where
     let bar = if no_bar {
         None
     } else {
-        let b = ProgressBar::new(100).with_style(bar_style_op());
+        // A dedicated style whose prefix carries the verb; the transaction
+        // style (`bar_style_op`) expects a per-package {msg} and left an empty
+        // 12-col prefix + blank trailing text on this D-Bus job bar.
+        let b = ProgressBar::new(100).with_style(bar_style_job());
+        b.set_prefix(label.to_string());
+        b.enable_steady_tick(Duration::from_millis(120));
         Some(b)
     };
 

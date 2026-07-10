@@ -1,16 +1,17 @@
+use crate::style::Palette;
 use alpm::{Alpm, DownloadEvent, Event, Progress};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::time::Duration;
 
-pub fn install(alpm: &Alpm, noprogressbar: bool) {
+pub fn install(alpm: &Alpm, noprogressbar: bool, palette: &Palette) {
     if noprogressbar || !std::io::stderr().is_terminal() {
         return;
     }
 
     let mp = MultiProgress::new();
-    install_event_cb(alpm, mp.clone());
+    install_event_cb(alpm, mp.clone(), palette.clone());
     install_progress_cb(alpm, mp.clone());
     install_dl_cb(alpm, mp);
 }
@@ -21,6 +22,15 @@ pub(crate) fn bar_style_op() -> ProgressStyle {
     // package name follows the bar as {msg}, so the row reads
     // "installing   [####] 42% <pkg>".
     ProgressStyle::with_template("{prefix:<12} {bar:30} {percent:>3}% {msg}")
+        .unwrap_or_else(|_| ProgressStyle::default_bar())
+        .progress_chars("##-")
+}
+
+/// Style for the image-update (`-Iu`/`-I`) D-Bus job bar. Like `bar_style_op`
+/// but with no trailing `{msg}` (the job has no per-package name) and an elapsed
+/// timer so a long, quiet install still shows life.
+pub(crate) fn bar_style_job() -> ProgressStyle {
+    ProgressStyle::with_template("{prefix:<12} {bar:30} {percent:>3}% ({elapsed})")
         .unwrap_or_else(|_| ProgressStyle::default_bar())
         .progress_chars("##-")
 }
@@ -36,39 +46,27 @@ fn bar_style_dl() -> ProgressStyle {
     .progress_chars("##-")
 }
 
-fn install_event_cb(alpm: &Alpm, mp: MultiProgress) {
-    alpm.set_event_cb(mp, |event, mp| match event.event() {
-        Event::CheckDepsStart => {
-            let _ = mp.println(":: checking dependencies...");
-        }
-        Event::ResolveDepsStart => {
-            let _ = mp.println(":: resolving dependencies...");
-        }
-        Event::InterConflictsStart => {
-            let _ = mp.println(":: looking for conflicting packages...");
-        }
-        Event::FileConflictsStart => {
-            let _ = mp.println(":: checking for file conflicts...");
-        }
-        Event::IntegrityStart => {
-            let _ = mp.println(":: checking package integrity...");
-        }
-        Event::LoadStart => {
-            let _ = mp.println(":: loading package files...");
-        }
-        Event::KeyringStart => {
-            let _ = mp.println(":: checking keyring...");
-        }
-        Event::TransactionStart => {
-            let _ = mp.println(":: processing transaction...");
-        }
-        Event::TransactionDone => {
-            let _ = mp.println(":: transaction done");
-        }
+fn install_event_cb(alpm: &Alpm, mp: MultiProgress, palette: Palette) {
+    // The status callback runs on the alpm side; `mp.println` interleaves the
+    // line above the live bars without disturbing them. The `::` marker is
+    // colorized to match the db-sync status line in sync.rs.
+    let status = move |mp: &MultiProgress, rest: &str| {
+        let _ = mp.println(format!("{} {rest}", palette.status.apply_to("::")));
+    };
+    alpm.set_event_cb(mp, move |event, mp| match event.event() {
+        Event::CheckDepsStart => status(mp, "checking dependencies..."),
+        Event::ResolveDepsStart => status(mp, "resolving dependencies..."),
+        Event::InterConflictsStart => status(mp, "looking for conflicting packages..."),
+        Event::FileConflictsStart => status(mp, "checking for file conflicts..."),
+        Event::IntegrityStart => status(mp, "checking package integrity..."),
+        Event::LoadStart => status(mp, "loading package files..."),
+        Event::KeyringStart => status(mp, "checking keyring..."),
+        Event::TransactionStart => status(mp, "processing transaction..."),
+        Event::TransactionDone => status(mp, "transaction done"),
         Event::HookRunStart(h) => {
             let name = h.name();
             if !name.is_empty() {
-                let _ = mp.println(format!(":: running hook {name}"));
+                status(mp, &format!("running hook {name}"));
             }
         }
         _ => {}

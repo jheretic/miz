@@ -402,7 +402,7 @@ fn images_upgrade(args: &Args) -> Result<()> {
 
     // Acquire (download). No-version form is the no-auth `update` action.
     let (acq_ver, acq_id, acq_path) = proxy.acquire(version, 0).map_err(map_call_error)?;
-    job::wait(&conn, &acq_path, acq_id, args.noprogressbar, removed)?;
+    job::wait(&conn, &acq_path, acq_id, args.noprogressbar, removed, "acquiring")?;
 
     if should_prompt(args.noconfirm) && !confirm("Proceed with installation? [Y/n] ") {
         return Ok(());
@@ -414,7 +414,7 @@ fn images_upgrade(args: &Args) -> Result<()> {
         .map_err(map_call_error)?
         .filter_map(|sig| sig.args().ok().map(|a| (a.id, a.status)));
     let (_iv, ins_id, ins_path) = proxy.install(&acq_ver, 0).map_err(map_call_error)?;
-    job::wait(&conn, &ins_path, ins_id, args.noprogressbar, removed)?;
+    job::wait(&conn, &ins_path, ins_id, args.noprogressbar, removed, "installing")?;
 
     if !args.quiet {
         println!("{name}: updated to {acq_ver}");

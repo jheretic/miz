@@ -36,15 +36,12 @@ pub struct Palette {
 
 impl Palette {
     /// Resolve the palette from the config's `color` flag plus the environment
-    /// and whether stdout is a TTY. `color` is `options.color` from the loaded
-    /// config.
+    /// and whether the output is a TTY. `color` is `options.color` from the
+    /// loaded config. Keyed on STDERR's TTY-ness: every colorized sink in miz
+    /// (the transaction summary, `::` status lines, progress bars) writes to
+    /// stderr, so `miz -S ... | pager` must still colorize the visible stderr
+    /// stream even though stdout is piped.
     pub fn resolve(color: bool) -> Self {
-        Self::with_enabled(color_enabled(color, std::io::stdout().is_terminal()))
-    }
-
-    /// Like [`Palette::resolve`] but keyed on stderr's TTY-ness -- for the error
-    /// path (main), which prints to stderr and has no loaded config to consult.
-    pub fn resolve_stderr(color: bool) -> Self {
         Self::with_enabled(color_enabled(color, std::io::stderr().is_terminal()))
     }
 
