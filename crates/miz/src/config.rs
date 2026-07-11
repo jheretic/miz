@@ -1,6 +1,5 @@
 use crate::cli::Cli;
 use crate::error::{MizError, Result};
-use crate::render::palette::Palette;
 use alpm::{Alpm, Depend, LogLevel, SigLevel, Usage};
 use miz_config::{MizConfig, Options, Repository};
 use std::fs;
@@ -41,11 +40,13 @@ const USER_CONFIG_REL: &str = "etc/miz.toml";
 /// returns an empty filelist forever.
 ///
 /// `-F` operations pass `Some(".files")`; everything else passes `None`.
-pub fn build_with_dbext(cli: &Cli, dbext: Option<&str>) -> Result<(Context, Palette)> {
+pub fn build_with_dbext(cli: &Cli, dbext: Option<&str>) -> Result<(Context, bool)> {
     let conf = load_config(cli.config.as_deref())?;
-    // Resolve the palette here (where the loaded config is in hand) and hand it
-    // back to main.rs, rather than storing it on the libalpm-linked Context.
-    let palette = Palette::resolve(conf.options.color);
+    // Return the raw color POLICY (config's `color` flag), not a Palette: the
+    // Palette is presentation and is built in the render layer (main.rs), so
+    // this libalpm-linked module stays free of any render/console dependency
+    // (it moves into miz-core later).
+    let color = conf.options.color;
 
     let root = cli
         .root
@@ -75,7 +76,7 @@ pub fn build_with_dbext(cli: &Cli, dbext: Option<&str>) -> Result<(Context, Pale
     // alpm. `-S` on an image without the mutable overlay active will fail to
     // write /usr files — that is the accepted immutable contract.
     let ctx = assemble_context(&conf, root, dbpath, dbext, image_db.as_deref())?;
-    Ok((ctx, palette))
+    Ok((ctx, color))
 }
 
 /// Build a Context rooted at an arbitrary tree (the `-I --reinstall-layered`

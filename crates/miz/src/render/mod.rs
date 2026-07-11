@@ -1,9 +1,14 @@
+pub mod completions;
 pub mod confirm;
 pub mod database;
 pub mod deptest;
 pub mod files;
 pub mod fmt;
+pub mod images;
 pub mod palette;
 pub mod progress_indicatif;
 pub mod query;
+pub mod remove;
+pub mod sync;
+pub mod upgrade;
 pub mod version;

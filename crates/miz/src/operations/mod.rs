@@ -1,4 +1,3 @@
-pub mod completions;
 pub mod database;
 pub mod deptest;
 pub mod files;

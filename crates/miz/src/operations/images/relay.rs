@@ -53,6 +53,7 @@
 
 use crate::common::osrelease;
 use crate::common::progress::SharedSink;
+use crate::common::report::RelayReport;
 use crate::common::transaction::{commit, prepare, TransGuard};
 use crate::config;
 use crate::error::{MizError, Result};
@@ -610,16 +611,15 @@ fn render_plan(plan: &RelayPlan) -> String {
 /// `miz -I --reinstall-layered [<version>]`: run the relay standalone (e.g. to
 /// preview with `--dry-run`, or re-run after a manual sysupdate). The primary
 /// path is [`relay_after_upgrade`], invoked automatically by `-Iu`.
-pub fn run(args: Args, _config_path: Option<&Path>, sink: &SharedSink) -> Result<()> {
+pub fn run(args: Args, _config_path: Option<&Path>, sink: &SharedSink) -> Result<RelayReport> {
     let running = osrelease::booted_image_version();
     let new_version = args.targets.first().cloned();
 
     if args.dry_run {
-        print!(
-            "{}",
-            render_plan(&RelayPlan::new(running.as_deref(), new_version.as_deref()))
-        );
-        return Ok(());
+        return Ok(RelayReport::DryRun(render_plan(&RelayPlan::new(
+            running.as_deref(),
+            new_version.as_deref(),
+        ))));
     }
 
     let new_version = new_version.ok_or_else(|| {
@@ -640,14 +640,13 @@ pub fn relay_after_upgrade(
     dry_run: bool,
     quiet: bool,
     sink: &SharedSink,
-) -> Result<()> {
+) -> Result<RelayReport> {
     if dry_run {
         let running = osrelease::booted_image_version();
-        print!(
-            "{}",
-            render_plan(&RelayPlan::new(running.as_deref(), Some(new_version)))
-        );
-        return Ok(());
+        return Ok(RelayReport::DryRun(render_plan(&RelayPlan::new(
+            running.as_deref(),
+            Some(new_version),
+        ))));
     }
     live_execute(new_version, quiet, sink)
 }
@@ -659,7 +658,7 @@ pub fn relay_after_upgrade(
 /// The real relay sequence. Nested so cleanup unwinds in the correct order via
 /// [`Teardown`]. Fails closed at each precondition; only the final `-Syu` commit
 /// mutates persistent state, and the new snapshot is deleted on any failure.
-fn live_execute(new_version: &str, quiet: bool, sink: &SharedSink) -> Result<()> {
+fn live_execute(new_version: &str, quiet: bool, sink: &SharedSink) -> Result<RelayReport> {
     let running = osrelease::booted_image_version().ok_or_else(|| {
         MizError::Other(
             "cannot determine the running IMAGE_VERSION from os-release; cannot name \
@@ -937,10 +936,10 @@ fn live_execute(new_version: &str, quiet: bool, sink: &SharedSink) -> Result<()>
     td.commit();
     prune_old_snapshots(toplevel, &[new_version, &running], quiet);
 
-    if !quiet {
-        println!("relayed layered packages onto {new_subvol}");
-    }
-    Ok(())
+    Ok(RelayReport::Relayed {
+        subvol: new_subvol,
+        quiet,
+    })
 }
 
 /// Refresh the sync dbs and upgrade all layered packages (`-Syu`) against the

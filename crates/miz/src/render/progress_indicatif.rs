@@ -225,6 +225,23 @@ impl ProgressSink for IndicatifSink {
         }
     }
 
+    fn refresh_begin(&mut self) {
+        // Plain eprintln (not via MultiProgress) to match the pre-refactor
+        // order: the header printed before begin() created the live display.
+        eprintln!(
+            "{} Synchronizing package databases...",
+            self.palette.status.apply_to("::")
+        );
+    }
+
+    fn refresh_end(&mut self, up_to_date: bool) {
+        if up_to_date {
+            eprintln!(" databases are up to date");
+        } else {
+            eprintln!(" package databases synchronized");
+        }
+    }
+
     fn begin(&mut self) {
         // Re-anchor the MultiProgress after any preceding summary/confirm output
         // so bar redraws don't clear the wrong lines (terminal-jump fix).

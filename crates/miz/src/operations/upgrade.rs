@@ -1,5 +1,5 @@
 use crate::common::progress::SharedSink;
-use crate::common::report::{Confirmer, TransactionKind, TransactionPlan};
+use crate::common::report::{Confirmer, TransactionKind, TransactionPlan, UpgradeReport};
 use crate::common::transaction::{collect_pkgs, commit, format_print_line, prepare, TransGuard};
 use crate::config::Context;
 use crate::error::{MizError, Result};
@@ -13,7 +13,7 @@ pub fn run(
     ctx: &mut Context,
     confirmer: &mut dyn Confirmer,
     sink: &SharedSink,
-) -> Result<()> {
+) -> Result<UpgradeReport> {
     apply_overwrites(&mut ctx.alpm, &args.overwrite)?;
     let flags = build_flags(&args);
 
@@ -28,7 +28,7 @@ pub fn run(
     let targets = collect_pkgs(guard.alpm().trans_add());
     if targets.is_empty() {
         guard.release()?;
-        return Ok(());
+        return Ok(UpgradeReport::Done);
     }
 
     let plan = TransactionPlan::with_targets(
@@ -38,7 +38,7 @@ pub fn run(
     );
     if !confirmer.confirm(&plan) {
         guard.release()?;
-        return Ok(());
+        return Ok(UpgradeReport::Done);
     }
 
     // Register progress callbacks only after the summary/confirm output, so the
@@ -47,7 +47,7 @@ pub fn run(
     crate::common::progress::register(guard.alpm(), sink.clone());
     commit(guard.alpm())?;
     guard.release()?;
-    Ok(())
+    Ok(UpgradeReport::Done)
 }
 
 fn build_flags(args: &Args) -> TransFlag {
@@ -107,7 +107,7 @@ fn load_one<'a>(alpm: &'a Alpm, path: &Path) -> Result<alpm::LoadedPackage<'a>> 
         })
 }
 
-fn run_print(args: &Args, ctx: &mut Context, flags: TransFlag) -> Result<()> {
+fn run_print(args: &Args, ctx: &mut Context, flags: TransFlag) -> Result<UpgradeReport> {
     let flags = flags | TransFlag::NO_LOCK;
     let mut guard = TransGuard::new(&mut ctx.alpm, flags)?;
     load_and_add(guard.alpm(), &args.files)?;
@@ -121,12 +121,12 @@ fn run_print(args: &Args, ctx: &mut Context, flags: TransFlag) -> Result<()> {
         .map(|p: &Package| format_print_line(p, format))
         .collect();
 
-    for line in lines {
-        println!("{line}");
-    }
-
-    if let Err(e) = guard.release() {
-        eprintln!("warning: trans_release failed after --print: {e}");
-    }
-    Ok(())
+    let release_warning = guard
+        .release()
+        .err()
+        .map(|e| format!("trans_release failed after --print: {e}"));
+    Ok(UpgradeReport::Print {
+        lines,
+        release_warning,
+    })
 }

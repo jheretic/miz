@@ -14,7 +14,9 @@ mod job;
 mod relay;
 
 use crate::common::progress::SharedSink;
-use crate::common::report::{Confirmer, TransactionKind, TransactionPlan};
+use crate::common::report::{
+    Confirmer, ImageListRow, ImageUpgradeOutcome, ImagesReport, TransactionKind, TransactionPlan,
+};
 use crate::error::{MizError, Result};
 use client::{
     map_call_error, Login1ProxyBlocking, ManagerProxyBlocking, TargetProxyBlocking, FLAG_OFFLINE,
@@ -31,13 +33,13 @@ pub fn run(
     config_path: Option<&std::path::Path>,
     confirmer: &mut dyn Confirmer,
     sink: &SharedSink,
-) -> Result<()> {
+) -> Result<ImagesReport> {
     // Split-db image update: re-lay layered packages onto the new A/B image +
     // snapshot. Context-bearing (relay builds its own /run-rooted handle), so
     // it stays out of main.rs's needs_context path. Handled first so it never
     // falls through to the D-Bus verbs.
     if args.reinstall_layered {
-        return relay::run(args, config_path, sink);
+        return Ok(ImagesReport::Relay(relay::run(args, config_path, sink)?));
     }
     if args.list {
         return images_list(&args);
@@ -152,24 +154,22 @@ fn json_mode(arg: Option<&str>) -> Result<JsonMode> {
     }
 }
 
-/// Print `json` per `mode` (caller already excluded Off). Short prints the raw
-/// bytes as received; Pretty re-serializes via serde_json. A malformed payload
-/// under Pretty falls back to raw so the user still sees something.
-fn print_json(json: &str, mode: JsonMode) {
+/// Build the passthrough string for `json` per `mode` (caller already excluded
+/// Off). Short returns the raw bytes as received; Pretty re-serializes via
+/// serde_json. A malformed payload under Pretty falls back to raw so the user
+/// still sees something. The render layer prints it verbatim (via `println!`).
+fn json_payload(json: &str, mode: JsonMode) -> String {
     match mode {
         JsonMode::Off => unreachable!("caller handles Off before rendering"),
-        JsonMode::Short => println!("{json}"),
+        JsonMode::Short => json.to_string(),
         JsonMode::Pretty => match serde_json::from_str::<serde_json::Value>(json) {
-            Ok(v) => println!(
-                "{}",
-                serde_json::to_string_pretty(&v).unwrap_or_else(|_| json.to_string())
-            ),
-            Err(_) => println!("{json}"),
+            Ok(v) => serde_json::to_string_pretty(&v).unwrap_or_else(|_| json.to_string()),
+            Err(_) => json.to_string(),
         },
     }
 }
 
-fn images_list(args: &Args) -> Result<()> {
+fn images_list(args: &Args) -> Result<ImagesReport> {
     let (conn, targets) = connect()?;
     let (component, _version) = split_component(args.targets.first().map(String::as_str));
     let (name, proxy) = resolve_target(&conn, &targets, component)?;
@@ -178,6 +178,7 @@ fn images_list(args: &Args) -> Result<()> {
     let versions = proxy.list(flags)?;
     let installed = proxy.get_version().unwrap_or_default();
 
+    let mut rows = Vec::new();
     for version in &versions {
         // Per-version Describe marks [installed]/[newest]. Describe failures
         // (e.g. transient) degrade gracefully to the GetVersion comparison.
@@ -191,15 +192,20 @@ fn images_list(args: &Args) -> Result<()> {
             },
             Err(_) => (version == &installed, false),
         };
-        println!(
-            "{}",
-            format::list_line(&name, version, is_installed, is_newest, args.quiet)
-        );
+        rows.push(ImageListRow {
+            version: version.clone(),
+            installed: is_installed,
+            newest: is_newest,
+        });
     }
-    Ok(())
+    Ok(ImagesReport::List {
+        component: name,
+        quiet: args.quiet,
+        rows,
+    })
 }
 
-fn images_info(args: &Args) -> Result<()> {
+fn images_info(args: &Args) -> Result<ImagesReport> {
     let (conn, targets) = connect()?;
     let (component, version) = split_component(args.targets.first().map(String::as_str));
     let (name, proxy) = resolve_target(&conn, &targets, component)?;
@@ -238,47 +244,42 @@ fn images_info(args: &Args) -> Result<()> {
     // so a malformed body still prints rather than erroring. =off falls through.
     let mode = json_mode(args.json.as_deref())?;
     if !matches!(mode, JsonMode::Off) {
-        print_json(&json, mode);
-        return Ok(());
+        return Ok(ImagesReport::Json(json_payload(&json, mode)));
     }
 
     let d = Describe::parse(&json)
         .map_err(|e| MizError::Sysupdate(format!("could not parse Describe JSON: {e}")))?;
     let verbose = args.info >= 2 && !args.quiet;
-    print!("{}", format::info_block(&name, &d, verbose));
-    println!();
-    Ok(())
+    Ok(ImagesReport::Info(format::describe_fields(&name, &d, verbose)))
 }
 
-fn images_check_new(args: &Args) -> Result<()> {
+fn images_check_new(args: &Args) -> Result<ImagesReport> {
     let (conn, targets) = connect()?;
     let (component, _version) = split_component(args.targets.first().map(String::as_str));
     let (name, proxy) = resolve_target(&conn, &targets, component)?;
 
     let newest = proxy.check_new()?;
-    if newest.is_empty() {
-        if !args.quiet {
-            eprintln!("{name}: no newer version available");
-        }
-        return Ok(());
-    }
-    if args.quiet {
-        println!("{newest}");
-    } else {
-        println!("{name}: {newest} available");
-    }
-    Ok(())
+    let newest = if newest.is_empty() { None } else { Some(newest) };
+    Ok(ImagesReport::CheckNew {
+        name,
+        quiet: args.quiet,
+        newest,
+    })
 }
 
-fn images_components(args: &Args) -> Result<()> {
+fn images_components(args: &Args) -> Result<ImagesReport> {
     let (_conn, targets) = connect()?;
-    for (class, name, _path) in &targets {
-        println!("{}", format::component_line(class, name, args.quiet));
-    }
-    Ok(())
+    let rows = targets
+        .iter()
+        .map(|(class, name, _path)| (class.clone(), name.clone()))
+        .collect();
+    Ok(ImagesReport::Components {
+        quiet: args.quiet,
+        rows,
+    })
 }
 
-fn images_pending(args: &Args) -> Result<()> {
+fn images_pending(args: &Args) -> Result<ImagesReport> {
     let (conn, targets) = connect()?;
     let (component, _version) = split_component(args.targets.first().map(String::as_str));
     let (name, proxy) = resolve_target(&conn, &targets, component)?;
@@ -304,20 +305,17 @@ fn images_pending(args: &Args) -> Result<()> {
         None => false,
     };
 
-    if reboot_due {
-        if args.quiet {
-            println!("{installed}");
-        } else {
-            println!("{name}: reboot pending: booted {booted_label}, installed {installed_label}");
-        }
-    } else if !args.quiet {
-        // No reboot due -> status note to stderr, matching -Iy's note stream.
-        eprintln!("{name}: no reboot pending (booted {booted_label})");
-    }
-    Ok(())
+    Ok(ImagesReport::Pending {
+        name,
+        quiet: args.quiet,
+        installed: installed.clone(),
+        booted_label: booted_label.to_string(),
+        installed_label: installed_label.to_string(),
+        reboot_due,
+    })
 }
 
-fn images_features(args: &Args) -> Result<()> {
+fn images_features(args: &Args) -> Result<ImagesReport> {
     let (conn, targets) = connect()?;
     let (component, _version) = split_component(args.targets.first().map(String::as_str));
     let (name, proxy) = resolve_target(&conn, &targets, component)?;
@@ -328,19 +326,23 @@ fn images_features(args: &Args) -> Result<()> {
         proxy
             .set_feature_enabled(feature, 1, 0)
             .map_err(map_call_error)?;
-        if !args.quiet {
-            println!("{name}: enabled feature {feature} (run -Iu to apply)");
-        }
-        return Ok(());
+        return Ok(ImagesReport::FeatureToggle {
+            name,
+            feature: feature.clone(),
+            enabled: true,
+            quiet: args.quiet,
+        });
     }
     if let Some(feature) = &args.disable {
         proxy
             .set_feature_enabled(feature, 0, 0)
             .map_err(map_call_error)?;
-        if !args.quiet {
-            println!("{name}: disabled feature {feature} (run -Iu to apply)");
-        }
-        return Ok(());
+        return Ok(ImagesReport::FeatureToggle {
+            name,
+            feature: feature.clone(),
+            enabled: false,
+            quiet: args.quiet,
+        });
     }
 
     // component/<feature> -> describe that feature; bare component -> list.
@@ -350,25 +352,18 @@ fn images_features(args: &Args) -> Result<()> {
             // --json passthrough before any parse (mirrors -Ii).
             let mode = json_mode(args.json.as_deref())?;
             if !matches!(mode, JsonMode::Off) {
-                print_json(&json, mode);
-                return Ok(());
+                return Ok(ImagesReport::Json(json_payload(&json, mode)));
             }
             let f = describe::Feature::parse(&json).map_err(|e| {
                 MizError::Sysupdate(format!("could not parse DescribeFeature JSON: {e}"))
             })?;
-            print!("{}", format::feature_block(feature, &f));
-            println!();
+            Ok(ImagesReport::Info(format::feature_fields(feature, &f)))
         }
-        None => {
-            for feature in proxy.list_features(0)? {
-                println!("{feature}");
-            }
-        }
+        None => Ok(ImagesReport::FeatureList(proxy.list_features(0)?)),
     }
-    Ok(())
 }
 
-fn images_appstream(args: &Args) -> Result<()> {
+fn images_appstream(args: &Args) -> Result<ImagesReport> {
     let (conn, targets) = connect()?;
     // With a target, query that component's catalogs; bare -> all known URLs.
     let urls = match args.targets.first() {
@@ -382,17 +377,14 @@ fn images_appstream(args: &Args) -> Result<()> {
             manager.list_app_stream()?
         }
     };
-    for url in urls {
-        println!("{url}");
-    }
-    Ok(())
+    Ok(ImagesReport::AppStream(urls))
 }
 
 fn images_upgrade(
     args: &Args,
     confirmer: &mut dyn Confirmer,
     sink: &SharedSink,
-) -> Result<()> {
+) -> Result<ImagesReport> {
     let (conn, targets) = connect()?;
     let (component, version) = split_component(args.targets.first().map(String::as_str));
     let (name, proxy) = resolve_target(&conn, &targets, component)?;
@@ -418,10 +410,10 @@ fn images_upgrade(
         None => resolve_upgrade_plan(&proxy)?,
     };
     if matches!(plan, UpgradePlan::UpToDate) {
-        if !args.quiet {
-            eprintln!("{name}: already up to date");
-        }
-        return Ok(());
+        return Ok(ImagesReport::Upgrade(ImageUpgradeOutcome::AlreadyUpToDate {
+            name,
+            quiet: args.quiet,
+        }));
     }
     let (acquire_arg, host_changed) = acquire_args(&plan);
 
@@ -440,7 +432,7 @@ fn images_upgrade(
         TransactionKind::ImageInstall,
         "Proceed with installation? [Y/n] ",
     )) {
-        return Ok(());
+        return Ok(ImagesReport::Upgrade(ImageUpgradeOutcome::Declined));
     }
 
     // Install needs a fresh subscription (the prior iterator was consumed).
@@ -451,16 +443,6 @@ fn images_upgrade(
     let (_iv, ins_id, ins_path) = proxy.install(&acq_ver, 0).map_err(map_call_error)?;
     job::wait(&conn, &ins_path, ins_id, removed, "installing", sink)?;
 
-    if !args.quiet {
-        if host_changed {
-            println!("{name}: updated to {acq_ver}");
-        } else {
-            // In-place completion (e.g. a newly enabled feature): the version
-            // didn't advance, so "updated to" would be misleading.
-            println!("{name}: {acq_ver} completed (in place)");
-        }
-    }
-
     // Default named-subvolume relay: sysupdate has written the new /usr + UKI to
     // the inactive slot; now snapshot the root per version and upgrade layered
     // packages against the new image so a /usr rollback keeps them consistent
@@ -469,14 +451,33 @@ fn images_upgrade(
     // the installed version (feature download) touched only /var/lib/extensions,
     // has no root-snapshot coupling, and would make the relay try to re-create
     // the already-existing @archetype_<version> subvol (fail-closed).
-    if component == "host" && host_changed {
-        relay::relay_after_upgrade(&acq_ver, args.dry_run, args.quiet, sink)?;
-    }
+    // The install succeeded; the "updated to"/"completed" line is now owed
+    // regardless of what the relay does. Capture the relay outcome (don't `?`
+    // it away) so render prints the upgrade line FIRST, then a relay failure is
+    // surfaced by ImagesReport::outcome() -- matching the pre-refactor order
+    // where "updated to" printed before the relay ran.
+    let (relay, error) = if component == "host" && host_changed {
+        match relay::relay_after_upgrade(&acq_ver, args.dry_run, args.quiet, sink) {
+            Ok(r) => (Some(r), None),
+            Err(e) => (None, Some(e.to_string())),
+        }
+    } else {
+        (None, None)
+    };
 
-    if args.reboot {
-        return do_reboot(&conn);
-    }
-    Ok(())
+    // Reboot is deferred to main (after render) so the upgrade/relay status
+    // lines are emitted before the machine reboots -- and only when the relay
+    // did not fail.
+    let reboot = args.reboot && error.is_none();
+    Ok(ImagesReport::Upgrade(ImageUpgradeOutcome::Done {
+        name,
+        version: acq_ver,
+        host_changed,
+        quiet: args.quiet,
+        relay,
+        reboot,
+        error,
+    }))
 }
 
 /// Outcome of resolving a bare `-Iu` (no explicit version).
@@ -539,23 +540,32 @@ fn resolve_upgrade_plan(proxy: &TargetProxyBlocking<'_>) -> Result<UpgradePlan> 
     }
 }
 
-fn images_vacuum(args: &Args) -> Result<()> {
+fn images_vacuum(args: &Args) -> Result<ImagesReport> {
     let (conn, targets) = connect()?;
     let (component, _version) = split_component(args.targets.first().map(String::as_str));
     let (name, proxy) = resolve_target(&conn, &targets, component)?;
 
     // Vacuum is admin-auth; map a denial cleanly.
     let (instances, disabled) = proxy.vacuum().map_err(map_call_error)?;
-    if !args.quiet {
-        println!("{name}: removed {instances} version(s), disabled {disabled} transfer(s)");
-    }
-    Ok(())
+    Ok(ImagesReport::Vacuum {
+        name,
+        quiet: args.quiet,
+        instances,
+        disabled,
+    })
 }
 
-fn images_reboot(_args: &Args) -> Result<()> {
-    // Reboot only needs logind, NOT sysupdated — don't run connect()'s
-    // ListTargets probe, or `--reboot` would wrongly require systemd 257+
-    // on a host that has logind but no sysupdated.
+fn images_reboot(_args: &Args) -> Result<ImagesReport> {
+    reboot()?;
+    Ok(ImagesReport::Silent)
+}
+
+/// Reboot via logind. Public so main can trigger the deferred `-Iu --reboot`
+/// AFTER the upgrade/relay status lines have been rendered (the pre-refactor
+/// order). Reboot only needs logind, NOT sysupdated — don't run connect()'s
+/// ListTargets probe, or `--reboot` would wrongly require systemd 257+ on a
+/// host that has logind but no sysupdated.
+pub fn reboot() -> Result<()> {
     let conn = client::system_connection()?;
     do_reboot(&conn)
 }

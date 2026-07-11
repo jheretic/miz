@@ -1,12 +1,11 @@
 use crate::common::progress::SharedSink;
-use crate::common::report::{Confirmer, TransactionKind, TransactionPlan};
+use crate::common::report::{Confirmer, SyncReport, TransactionKind, TransactionPlan};
 use crate::common::transaction::{collect_pkgs, commit, prepare, TransGuard};
 use crate::config::Context;
 use crate::error::{MizError, Result};
 use crate::common::fmt::{
     format_date, format_size, format_validation, join_dep_list, join_list_str, join_optdeps,
 };
-use crate::render::palette::Palette;
 use alpm::{Alpm, Db, Package, Pkg, TransFlag};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -16,10 +15,9 @@ pub use crate::cli::args::sync::Args;
 pub fn run(
     args: Args,
     ctx: &mut Context,
-    palette: &Palette,
     confirmer: &mut dyn Confirmer,
     sink: &SharedSink,
-) -> Result<()> {
+) -> Result<SyncReport> {
     if args.clean > 0 {
         return sync_clean(&args, ctx, confirmer);
     }
@@ -28,23 +26,17 @@ pub fn run(
         let force = args.refresh >= 2;
         // pacman-style header + per-repo download bars (the dl callback fires
         // per db file with the repo name). Register callbacks BEFORE update so
-        // the fetch renders; the &Alpm borrow ends before syncdbs_mut().
+        // the fetch renders; the &Alpm borrow ends before syncdbs_mut(). The
+        // header/footer share the sink's live display (see ProgressSink docs).
         if !args.quiet {
-            eprintln!(
-                "{} Synchronizing package databases...",
-                palette.status.apply_to("::")
-            );
+            sink.borrow_mut().refresh_begin();
         }
         sink.borrow_mut().begin();
         crate::common::progress::register(&ctx.alpm, sink.clone());
         let dbs = ctx.alpm.syncdbs_mut();
         let up_to_date = dbs.update(force)?;
         if !args.quiet {
-            if up_to_date {
-                eprintln!(" databases are up to date");
-            } else {
-                eprintln!(" package databases synchronized");
-            }
+            sink.borrow_mut().refresh_end(up_to_date);
         }
     }
 
@@ -52,33 +44,33 @@ pub fn run(
         return sync_search(&args, ctx, re);
     }
     if args.list {
-        return sync_list(&args, ctx, palette);
+        return sync_list(&args, ctx);
     }
     if args.groups {
-        return sync_groups(&args, ctx, palette);
+        return sync_groups(&args, ctx);
     }
     if args.info > 0 {
-        return sync_info(&args, ctx, palette);
+        return sync_info(&args, ctx);
     }
 
     let do_install = !args.targets.is_empty() || args.sysupgrade > 0;
 
     if do_install {
-        return sync_install(&args, ctx, args.print, palette, confirmer, sink);
+        return sync_install(&args, ctx, args.print, confirmer, sink);
     }
 
     if args.print {
-        return Ok(());
+        return Ok(SyncReport::Done);
     }
 
     if args.refresh > 0 && args.targets.is_empty() && !args.downloadonly {
-        return Ok(());
+        return Ok(SyncReport::Done);
     }
 
     Err(MizError::NotImplemented)
 }
 
-fn sync_search(args: &Args, ctx: &Context, pattern: &str) -> Result<()> {
+fn sync_search(args: &Args, ctx: &Context, pattern: &str) -> Result<SyncReport> {
     let re = regex::Regex::new(pattern)?;
     let installed: HashSet<String> = ctx
         .alpm
@@ -88,6 +80,7 @@ fn sync_search(args: &Args, ctx: &Context, pattern: &str) -> Result<()> {
         .map(|p| p.name().to_string())
         .collect();
 
+    let mut lines = Vec::new();
     for db in ctx.alpm.syncdbs() {
         for pkg in db.pkgs() {
             let name_match = re.is_match(pkg.name());
@@ -96,7 +89,7 @@ fn sync_search(args: &Args, ctx: &Context, pattern: &str) -> Result<()> {
                 continue;
             }
             if args.quiet {
-                println!("{}", pkg.name());
+                lines.push(pkg.name().to_string());
                 continue;
             }
             let suffix = if installed.contains(pkg.name()) {
@@ -104,15 +97,21 @@ fn sync_search(args: &Args, ctx: &Context, pattern: &str) -> Result<()> {
             } else {
                 ""
             };
-            println!("{}/{} {}{}", db.name(), pkg.name(), pkg.version(), suffix);
+            lines.push(format!(
+                "{}/{} {}{}",
+                db.name(),
+                pkg.name(),
+                pkg.version(),
+                suffix
+            ));
             let desc = pkg.desc().unwrap_or("");
-            println!("    {desc}");
+            lines.push(format!("    {desc}"));
         }
     }
-    Ok(())
+    Ok(SyncReport::Search { lines })
 }
 
-fn sync_list(args: &Args, ctx: &Context, palette: &Palette) -> Result<()> {
+fn sync_list(args: &Args, ctx: &Context) -> Result<SyncReport> {
     let installed: HashSet<String> = ctx
         .alpm
         .localdb()
@@ -129,50 +128,73 @@ fn sync_list(args: &Args, ctx: &Context, palette: &Palette) -> Result<()> {
             match ctx.alpm.syncdbs().iter().find(|d| d.name() == name) {
                 Some(db) => out.push(db),
                 None => {
-                    eprintln!(
-                        "{} repository '{name}' was not found",
-                        palette.error.apply_to("error:")
-                    );
-                    return Err(MizError::PackageNotFound(name.clone()));
+                    // A missing repo aborts immediately, as before: no listing
+                    // lines precede it, so the diagnostic + error suffice.
+                    return Ok(SyncReport::Listing {
+                        lines: Vec::new(),
+                        diagnostics: vec![format!("repository '{name}' was not found")],
+                        error: Some(name.clone()),
+                    });
                 }
             }
         }
         out
     };
 
+    let mut lines = Vec::new();
     for db in targets {
         for pkg in db.pkgs() {
             if args.quiet {
-                println!("{}", pkg.name());
+                lines.push(pkg.name().to_string());
             } else {
                 let suffix = if installed.contains(pkg.name()) {
                     " [installed]"
                 } else {
                     ""
                 };
-                println!("{} {} {}{}", db.name(), pkg.name(), pkg.version(), suffix);
+                lines.push(format!(
+                    "{} {} {}{}",
+                    db.name(),
+                    pkg.name(),
+                    pkg.version(),
+                    suffix
+                ));
             }
         }
     }
-    Ok(())
+    Ok(SyncReport::Listing {
+        lines,
+        diagnostics: Vec::new(),
+        error: None,
+    })
 }
 
-fn sync_groups(args: &Args, ctx: &Context, palette: &Palette) -> Result<()> {
+fn sync_groups(args: &Args, ctx: &Context) -> Result<SyncReport> {
     if args.targets.is_empty() {
         let mut seen: HashSet<String> = HashSet::new();
+        let mut lines = Vec::new();
         for db in ctx.alpm.syncdbs() {
             if let Ok(groups) = db.groups() {
                 for group in groups {
                     if seen.insert(group.name().to_string()) {
-                        println!("{}", group.name());
+                        lines.push(group.name().to_string());
                     }
                 }
             }
         }
-        return Ok(());
+        return Ok(SyncReport::Listing {
+            lines,
+            diagnostics: Vec::new(),
+            error: None,
+        });
     }
 
-    let mut any_missing = false;
+    // Original ordering: all listing lines print during the sweep, and each
+    // missing group's diagnostic prints at its point in the loop. Since the
+    // renderer emits all listing lines (stdout) then all diagnostics (stderr),
+    // and the two streams are independent, byte order per stream is preserved.
+    let mut lines = Vec::new();
+    let mut diagnostics = Vec::new();
     for name in &args.targets {
         let mut found = false;
         for db in ctx.alpm.syncdbs() {
@@ -180,38 +202,46 @@ fn sync_groups(args: &Args, ctx: &Context, palette: &Palette) -> Result<()> {
                 found = true;
                 for pkg in group.packages() {
                     if args.quiet {
-                        println!("{}", pkg.name());
+                        lines.push(pkg.name().to_string());
                     } else {
-                        println!("{} {}", name, pkg.name());
+                        lines.push(format!("{} {}", name, pkg.name()));
                     }
                 }
             }
         }
         if !found {
-            eprintln!(
-                "{} group '{name}' was not found",
-                palette.error.apply_to("error:")
-            );
-            any_missing = true;
+            diagnostics.push(format!("group '{name}' was not found"));
         }
     }
-    if any_missing {
-        return Err(MizError::PackageNotFound(args.targets.join(", ")));
-    }
-    Ok(())
+    let error = if diagnostics.is_empty() {
+        None
+    } else {
+        Some(args.targets.join(", "))
+    };
+    Ok(SyncReport::Listing {
+        lines,
+        diagnostics,
+        error,
+    })
 }
 
-fn sync_info(args: &Args, ctx: &Context, palette: &Palette) -> Result<()> {
+fn sync_info(args: &Args, ctx: &Context) -> Result<SyncReport> {
     if args.targets.is_empty() {
+        let mut lines = Vec::new();
         for db in ctx.alpm.syncdbs() {
             for pkg in db.pkgs() {
-                print_sync_info(args, db, pkg);
+                push_sync_info(&mut lines, args, db, pkg);
             }
         }
-        return Ok(());
+        return Ok(SyncReport::Listing {
+            lines,
+            diagnostics: Vec::new(),
+            error: None,
+        });
     }
 
-    let mut missing = false;
+    let mut lines = Vec::new();
+    let mut diagnostics = Vec::new();
     for name in &args.targets {
         let (repo, pkgname) = split_repo_target(name);
         let mut found = false;
@@ -222,47 +252,57 @@ fn sync_info(args: &Args, ctx: &Context, palette: &Palette) -> Result<()> {
                 }
             }
             if let Ok(pkg) = db.pkg(pkgname.as_bytes()) {
-                print_sync_info(args, db, pkg);
+                push_sync_info(&mut lines, args, db, pkg);
                 found = true;
                 break;
             }
         }
         if !found {
-            eprintln!(
-                "{} package '{name}' was not found",
-                palette.error.apply_to("error:")
-            );
-            missing = true;
+            diagnostics.push(format!("package '{name}' was not found"));
         }
     }
-    if missing {
-        return Err(MizError::PackageNotFound(args.targets.join(", ")));
-    }
-    Ok(())
+    let error = if diagnostics.is_empty() {
+        None
+    } else {
+        Some(args.targets.join(", "))
+    };
+    Ok(SyncReport::Listing {
+        lines,
+        diagnostics,
+        error,
+    })
 }
 
-fn print_sync_info(args: &Args, db: &Db, pkg: &Pkg) {
-    let label = |k: &str, v: &str| println!("{:<19}: {}", k, v);
-    let label_or = |k: &str, v: Option<&str>| label(k, v.unwrap_or("None"));
+fn push_sync_info(out: &mut Vec<String>, args: &Args, db: &Db, pkg: &Pkg) {
+    macro_rules! label {
+        ($k:expr, $v:expr) => {
+            out.push(format!("{:<19}: {}", $k, $v))
+        };
+    }
+    macro_rules! label_or {
+        ($k:expr, $v:expr) => {
+            label!($k, $v.unwrap_or("None"))
+        };
+    }
 
-    label("Repository", db.name());
-    label("Name", pkg.name());
-    label("Version", pkg.version().as_str());
-    label_or("Description", pkg.desc());
-    label_or("Architecture", pkg.arch());
-    label_or("URL", pkg.url());
-    label("Licenses", &join_list_str(pkg.licenses(), "None"));
-    label("Groups", &join_list_str(pkg.groups(), "None"));
-    label("Provides", &join_dep_list(pkg.provides(), "None"));
-    label("Depends On", &join_dep_list(pkg.depends(), "None"));
-    label("Optional Deps", &join_optdeps(pkg, "None"));
-    label("Conflicts With", &join_dep_list(pkg.conflicts(), "None"));
-    label("Replaces", &join_dep_list(pkg.replaces(), "None"));
-    label("Download Size", &format_size(pkg.size()));
-    label("Installed Size", &format_size(pkg.isize()));
-    label_or("Packager", pkg.packager());
-    label("Build Date", &format_date(pkg.build_date()));
-    label("Validated By", &format_validation(pkg.validation()));
+    label!("Repository", db.name());
+    label!("Name", pkg.name());
+    label!("Version", pkg.version().as_str());
+    label_or!("Description", pkg.desc());
+    label_or!("Architecture", pkg.arch());
+    label_or!("URL", pkg.url());
+    label!("Licenses", &join_list_str(pkg.licenses(), "None"));
+    label!("Groups", &join_list_str(pkg.groups(), "None"));
+    label!("Provides", &join_dep_list(pkg.provides(), "None"));
+    label!("Depends On", &join_dep_list(pkg.depends(), "None"));
+    label!("Optional Deps", &join_optdeps(pkg, "None"));
+    label!("Conflicts With", &join_dep_list(pkg.conflicts(), "None"));
+    label!("Replaces", &join_dep_list(pkg.replaces(), "None"));
+    label!("Download Size", &format_size(pkg.size()));
+    label!("Installed Size", &format_size(pkg.isize()));
+    label_or!("Packager", pkg.packager());
+    label!("Build Date", &format_date(pkg.build_date()));
+    label!("Validated By", &format_validation(pkg.validation()));
 
     if args.info >= 2 {
         let backups: Vec<String> = pkg
@@ -271,16 +311,16 @@ fn print_sync_info(args: &Args, db: &Db, pkg: &Pkg) {
             .map(|b| format!("{}\t{}", b.name(), b.hash()))
             .collect();
         if backups.is_empty() {
-            label("Backup Files", "None");
+            label!("Backup Files", "None");
         } else {
-            println!("Backup Files       :");
+            out.push("Backup Files       :".to_string());
             for line in backups {
-                println!("{line}");
+                out.push(line);
             }
         }
     }
 
-    println!();
+    out.push(String::new());
 }
 
 fn build_flags(args: &Args) -> TransFlag {
@@ -399,10 +439,9 @@ fn sync_install(
     args: &Args,
     ctx: &mut Context,
     print_only: bool,
-    palette: &Palette,
     confirmer: &mut dyn Confirmer,
     sink: &SharedSink,
-) -> Result<()> {
+) -> Result<SyncReport> {
     apply_overwrites(&mut ctx.alpm, &args.overwrite)?;
     apply_ignores(&mut ctx.alpm, &args.ignore, &args.ignoregroup)?;
 
@@ -435,22 +474,20 @@ fn sync_install(
                 None => format_print_target(p),
             })
             .collect();
-        for line in lines {
-            println!("{line}");
-        }
-        if let Err(e) = guard.release() {
-            eprintln!(
-                "{} trans_release failed after --print: {e}",
-                palette.warning.apply_to("warning:")
-            );
-        }
-        return Ok(());
+        let release_warning = guard
+            .release()
+            .err()
+            .map(|e| format!("trans_release failed after --print: {e}"));
+        return Ok(SyncReport::Print {
+            lines,
+            release_warning,
+        });
     }
 
     let targets = collect_pkgs(guard.alpm().trans_add());
     if targets.is_empty() {
         guard.release()?;
-        return Ok(());
+        return Ok(SyncReport::Done);
     }
 
     let (kind, prompt) = if args.downloadonly {
@@ -461,7 +498,7 @@ fn sync_install(
     let plan = TransactionPlan::with_targets(targets, kind, prompt);
     if !confirmer.confirm(&plan) {
         guard.release()?;
-        return Ok(());
+        return Ok(SyncReport::Done);
     }
 
     // Register the progress callbacks ONLY now -- after the summary + confirm
@@ -470,17 +507,19 @@ fn sync_install(
     // anchor, so bar redraws cleared the wrong lines and the prompt jumped to
     // the top of the screen. begin() here (right before the transaction draws)
     // keeps its line accounting correct.
-    if !print_only {
-        sink.borrow_mut().begin();
-        crate::common::progress::register(guard.alpm(), sink.clone());
-    }
+    sink.borrow_mut().begin();
+    crate::common::progress::register(guard.alpm(), sink.clone());
 
     commit(guard.alpm())?;
     guard.release()?;
-    Ok(())
+    Ok(SyncReport::Done)
 }
 
-fn sync_clean(args: &Args, ctx: &mut Context, confirmer: &mut dyn Confirmer) -> Result<()> {
+fn sync_clean(
+    args: &Args,
+    ctx: &mut Context,
+    confirmer: &mut dyn Confirmer,
+) -> Result<SyncReport> {
     let installed: HashSet<(String, String)> = ctx
         .alpm
         .localdb()
@@ -502,7 +541,7 @@ fn sync_clean(args: &Args, ctx: &mut Context, confirmer: &mut dyn Confirmer) -> 
         TransactionKind::CleanCache,
         prompt,
     )) {
-        return Ok(());
+        return Ok(SyncReport::Done);
     }
 
     let mut removed = 0u64;
@@ -544,8 +583,7 @@ fn sync_clean(args: &Args, ctx: &mut Context, confirmer: &mut dyn Confirmer) -> 
             let _ = std::fs::remove_file(PathBuf::from(sig));
         }
     }
-    eprintln!("removed {removed} package file(s) from cache");
-    Ok(())
+    Ok(SyncReport::Clean { removed })
 }
 
 fn is_cache_artifact(name: &str) -> bool {

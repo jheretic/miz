@@ -33,12 +33,13 @@ fn dispatch(cli: Cli) -> error::Result<()> {
         Operation::Files(_) => Some(".files"),
         _ => None,
     };
-    // build_with_dbext resolves the palette from the loaded config and returns
-    // it alongside the Context; the palette is threaded into the operations
-    // instead of living on Context.
+    // build_with_dbext returns the raw color POLICY (config's `color` flag); the
+    // Palette (presentation) is built HERE in the render layer, so the
+    // libalpm-linked config module carries no render/console dependency. The
+    // palette is threaded into the operations instead of living on Context.
     let (mut ctx, palette) = if needs_context {
-        let (c, p) = config::build_with_dbext(&cli, dbext)?;
-        (Some(c), Some(p))
+        let (c, color) = config::build_with_dbext(&cli, dbext)?;
+        (Some(c), Some(render::palette::Palette::resolve(color)))
     } else {
         (None, None)
     };
@@ -69,17 +70,16 @@ fn dispatch(cli: Cli) -> error::Result<()> {
         }
         Operation::Remove(args) => {
             let (mut confirmer, sink) = make_seams(args.noconfirm, args.noprogressbar);
-            operations::remove::run(args, ctx.as_mut().unwrap(), &mut confirmer, &sink)
+            let report = operations::remove::run(args, ctx.as_mut().unwrap(), &mut confirmer, &sink)?;
+            render::remove::render(&report);
+            report.outcome()
         }
         Operation::Sync(args) => {
             let (mut confirmer, sink) = make_seams(args.noconfirm, args.noprogressbar);
-            operations::sync::run(
-                args,
-                ctx.as_mut().unwrap(),
-                palette.as_ref().unwrap(),
-                &mut confirmer,
-                &sink,
-            )
+            let pal = palette.clone().unwrap();
+            let report = operations::sync::run(args, ctx.as_mut().unwrap(), &mut confirmer, &sink)?;
+            render::sync::render(&report, &pal);
+            report.outcome()
         }
         Operation::Deptest(args) => {
             let report = operations::deptest::run(args, ctx.as_ref().unwrap())?;
@@ -88,7 +88,9 @@ fn dispatch(cli: Cli) -> error::Result<()> {
         }
         Operation::Upgrade(args) => {
             let (mut confirmer, sink) = make_seams(args.noconfirm, args.noprogressbar);
-            operations::upgrade::run(args, ctx.as_mut().unwrap(), &mut confirmer, &sink)
+            let report = operations::upgrade::run(args, ctx.as_mut().unwrap(), &mut confirmer, &sink)?;
+            render::upgrade::render(&report);
+            report.outcome()
         }
         Operation::Files(args) => {
             let report = operations::files::run(args, ctx.as_mut().unwrap())?;
@@ -102,9 +104,17 @@ fn dispatch(cli: Cli) -> error::Result<()> {
         }
         Operation::Images(args) => {
             let (mut confirmer, sink) = make_seams(args.noconfirm, args.noprogressbar);
-            operations::images::run(args, config_path.as_deref(), &mut confirmer, &sink)
+            let report =
+                operations::images::run(args, config_path.as_deref(), &mut confirmer, &sink)?;
+            render::images::render(&report);
+            // Deferred reboot (`-Iu --reboot`): render printed the upgrade/relay
+            // lines first, now trigger the reboot before returning outcome.
+            if report.wants_reboot() {
+                operations::images::reboot()?;
+            }
+            report.outcome()
         }
-        Operation::Completions { shell } => operations::completions::run(shell),
+        Operation::Completions { shell } => render::completions::run(shell),
     }
 }
 

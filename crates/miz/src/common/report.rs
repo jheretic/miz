@@ -283,6 +283,230 @@ impl QueryReport {
     }
 }
 
+// ---------------------------------------------------------------------------
+// sync
+// ---------------------------------------------------------------------------
+
+/// Deferred output for a `-S` run. The refresh header/footer (`::
+/// Synchronizing...` / ` package databases synchronized`) are NOT here: they
+/// must interleave with the live download bars, so core emits them through the
+/// progress sink. Everything else the old code println!'d becomes a variant.
+pub enum SyncReport {
+    /// `-Ss`: pre-built stdout lines (name/version + description), in order.
+    Search { lines: Vec<String> },
+    /// `-Sl`/`-Sg`/`-Si`: stdout body lines, plus colorized "error: {msg}"
+    /// diagnostics for missing repos/groups/packages, plus a terminal
+    /// PackageNotFound(joined) if any target was missing. Partial-results
+    /// idiom: found listings render first, diagnostics next, error last.
+    Listing {
+        lines: Vec<String>,
+        diagnostics: Vec<String>,
+        error: Option<String>,
+    },
+    /// `-Sc`/`-Scc`: number of cache files removed (only when the user
+    /// confirmed; a declined prompt yields `Done` with no output).
+    Clean { removed: u64 },
+    /// `-Sp` / `--print`: print-target lines, plus an optional colorized
+    /// "warning: {msg}" if `trans_release` failed after printing.
+    Print {
+        lines: Vec<String>,
+        release_warning: Option<String>,
+    },
+    /// Committed install, refresh-only, declined confirm, or nothing-to-do:
+    /// no further render output (summary/progress/commit-errors already went
+    /// through the confirmer/sink/transaction seams).
+    Done,
+}
+
+impl SyncReport {
+    pub fn outcome(&self) -> Result<()> {
+        match self {
+            SyncReport::Listing {
+                error: Some(joined),
+                ..
+            } => Err(MizError::PackageNotFound(joined.clone())),
+            _ => Ok(()),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// remove
+// ---------------------------------------------------------------------------
+
+/// Deferred output for a `-R` run. Structurally identical to
+/// [`UpgradeReport`] today (both only defer `--print` output); kept distinct so
+/// a daemon can diverge without a breaking change.
+pub enum RemoveReport {
+    /// `-Rp` / `--print`: print lines + optional uncolored release warning.
+    Print {
+        lines: Vec<String>,
+        release_warning: Option<String>,
+    },
+    /// Committed removal / declined / nothing-to-do: no further render output.
+    Done,
+}
+
+impl RemoveReport {
+    pub fn outcome(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// upgrade
+// ---------------------------------------------------------------------------
+
+/// Deferred output for a `-U` run. See [`RemoveReport`] on the shared shape.
+pub enum UpgradeReport {
+    /// `-Up` / `--print`: print lines + optional uncolored release warning.
+    Print {
+        lines: Vec<String>,
+        release_warning: Option<String>,
+    },
+    /// Committed install / declined / nothing-to-do: no further render output.
+    Done,
+}
+
+impl UpgradeReport {
+    pub fn outcome(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// images
+// ---------------------------------------------------------------------------
+
+/// One `-Il` row: a concrete version plus its `[installed]`/`[newest]` markers.
+/// Marker computation (per-version Describe) is core; the render layer turns
+/// this into the `{component} {version}{suffix}` line.
+pub struct ImageListRow {
+    pub version: String,
+    pub installed: bool,
+    pub newest: bool,
+}
+
+/// Outcome of the relay sub-step (standalone `--reinstall-layered` or the
+/// automatic post-`-Iu` relay). The `-Syu` transaction + teardown/prune
+/// warnings run live during core; only the trailing textual status defers here.
+pub enum RelayReport {
+    /// `--dry-run`: the plan preview (already newline-terminated, printed verbatim).
+    DryRun(String),
+    /// Live relay finished; render prints "relayed layered packages onto {subvol}".
+    Relayed { subvol: String, quiet: bool },
+}
+
+/// Outcome of `-Iu`. Bars (acquire/install/relay `-Syu`) already went through
+/// the progress sink and the prompt through the confirmer; only the trailing
+/// status line(s) defer to render.
+pub enum ImageUpgradeOutcome {
+    /// Nothing to do; render emits "{name}: already up to date" to stderr.
+    AlreadyUpToDate { name: String, quiet: bool },
+    /// The confirmation was declined: no output.
+    Declined,
+    /// Install completed. `host_changed` picks "updated to" vs the in-place
+    /// completion wording; `relay` is present only for the host component when
+    /// the version actually advanced. `reboot` requests a post-render reboot
+    /// (deferred to main so the upgrade/relay lines print BEFORE reboot, as the
+    /// pre-refactor code did). `error` carries a terminal relay failure so
+    /// render prints the completed upgrade line first, then it propagates.
+    Done {
+        name: String,
+        version: String,
+        host_changed: bool,
+        quiet: bool,
+        relay: Option<RelayReport>,
+        reboot: bool,
+        error: Option<String>,
+    },
+}
+
+/// Per-sub-op result for `miz -I`. Each variant carries exactly the values the
+/// old inline print sites emitted; `render::images` reproduces the stdout/stderr
+/// byte-for-byte. `Json` is the `--json=short/pretty` passthrough (emitted
+/// verbatim before any parse).
+pub enum ImagesReport {
+    /// `-Il`: rows for a resolved component.
+    List {
+        component: String,
+        quiet: bool,
+        rows: Vec<ImageListRow>,
+    },
+    /// `-Ii`/`-If` `--json` passthrough: the payload string, printed verbatim.
+    Json(String),
+    /// `-Ii`/`-If`: label fields followed by a trailing blank line.
+    Info(Vec<InfoField>),
+    /// `-Iy`: `newest` is `None` when nothing newer is available.
+    CheckNew {
+        name: String,
+        quiet: bool,
+        newest: Option<String>,
+    },
+    /// `-Ig`: (class, name) rows.
+    Components {
+        quiet: bool,
+        rows: Vec<(String, String)>,
+    },
+    /// `-Ip`: reboot-pending status.
+    Pending {
+        name: String,
+        quiet: bool,
+        installed: String,
+        booted_label: String,
+        installed_label: String,
+        reboot_due: bool,
+    },
+    /// `-If` bare: plain feature id lines.
+    FeatureList(Vec<String>),
+    /// `--enable`/`--disable`: confirmation line to stdout when not quiet.
+    FeatureToggle {
+        name: String,
+        feature: String,
+        enabled: bool,
+        quiet: bool,
+    },
+    /// `--appstream`: catalog URLs.
+    AppStream(Vec<String>),
+    /// `-Iu`.
+    Upgrade(ImageUpgradeOutcome),
+    /// `-Ic`.
+    Vacuum {
+        name: String,
+        quiet: bool,
+        instances: u32,
+        disabled: u32,
+    },
+    /// `--reinstall-layered` (standalone) or the automatic relay.
+    Relay(RelayReport),
+    /// No output (e.g. `--reboot`).
+    Silent,
+}
+
+impl ImagesReport {
+    pub fn outcome(&self) -> Result<()> {
+        // A relay failure after a completed install is carried here so render
+        // prints the "updated to" line first; propagate it now with the same
+        // generic exit as the pre-refactor `?`.
+        if let ImagesReport::Upgrade(ImageUpgradeOutcome::Done {
+            error: Some(e), ..
+        }) = self
+        {
+            return Err(MizError::Sysupdate(e.clone()));
+        }
+        Ok(())
+    }
+
+    /// Whether a post-render reboot was requested (`-Iu --reboot`). main
+    /// triggers it AFTER rendering so the upgrade/relay lines print first.
+    pub fn wants_reboot(&self) -> bool {
+        matches!(
+            self,
+            ImagesReport::Upgrade(ImageUpgradeOutcome::Done { reboot: true, .. })
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,6 +552,33 @@ mod tests {
                 "Do you want to remove these packages? [Y/n] ".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn sync_report_outcome_propagates_only_listing_error() {
+        assert!(SyncReport::Done.outcome().is_ok());
+        assert!(SyncReport::Search { lines: vec![] }.outcome().is_ok());
+        assert!(SyncReport::Clean { removed: 3 }.outcome().is_ok());
+        assert!(SyncReport::Listing {
+            lines: vec![],
+            diagnostics: vec![],
+            error: None,
+        }
+        .outcome()
+        .is_ok());
+        let err = SyncReport::Listing {
+            lines: vec![],
+            diagnostics: vec!["package 'x' was not found".into()],
+            error: Some("x".into()),
+        }
+        .outcome();
+        assert!(matches!(err, Err(MizError::PackageNotFound(s)) if s == "x"));
+    }
+
+    #[test]
+    fn remove_upgrade_reports_never_error() {
+        assert!(RemoveReport::Done.outcome().is_ok());
+        assert!(UpgradeReport::Done.outcome().is_ok());
     }
 
     #[test]

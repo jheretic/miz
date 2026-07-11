@@ -74,6 +74,18 @@ pub enum ProgressEvent {
 pub trait ProgressSink {
     fn handle(&mut self, ev: ProgressEvent);
 
+    /// The `-Sy` refresh header (`:: Synchronizing package databases...`). It
+    /// must print BEFORE the per-db download bars and share their live display,
+    /// so core routes it here rather than into a post-hoc report render. The
+    /// renderer colorizes the `::` marker; a daemon sink can ignore it. Default
+    /// no-op for recording sinks.
+    fn refresh_begin(&mut self) {}
+
+    /// The `-Sy` refresh footer, printed after the download bars.
+    /// `up_to_date` selects ` databases are up to date` vs ` package databases
+    /// synchronized` (wording owned by the renderer). Default no-op.
+    fn refresh_end(&mut self, _up_to_date: bool) {}
+
     /// Start a fresh progress session. Renderers that anchor a live display
     /// (indicatif's `MultiProgress`) re-create it here so its cursor anchor is
     /// set AFTER any summary/confirm prints -- preserving the sync_install
