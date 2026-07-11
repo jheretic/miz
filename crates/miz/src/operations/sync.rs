@@ -1,10 +1,10 @@
+use crate::common::progress::SharedSink;
+use crate::common::report::{Confirmer, TransactionKind, TransactionPlan};
+use crate::common::transaction::{collect_pkgs, commit, prepare, TransGuard};
 use crate::config::Context;
 use crate::error::{MizError, Result};
-use crate::operations::query::{
+use crate::common::fmt::{
     format_date, format_size, format_validation, join_dep_list, join_list_str, join_optdeps,
-};
-use crate::common::transaction::{
-    collect_pkgs, commit, confirm, prepare, print_summary, should_prompt, TransGuard,
 };
 use crate::render::palette::Palette;
 use alpm::{Alpm, Db, Package, Pkg, TransFlag};
@@ -13,9 +13,15 @@ use std::path::PathBuf;
 
 pub use crate::cli::args::sync::Args;
 
-pub fn run(args: Args, ctx: &mut Context, palette: &Palette) -> Result<()> {
+pub fn run(
+    args: Args,
+    ctx: &mut Context,
+    palette: &Palette,
+    confirmer: &mut dyn Confirmer,
+    sink: &SharedSink,
+) -> Result<()> {
     if args.clean > 0 {
-        return sync_clean(&args, ctx);
+        return sync_clean(&args, ctx, confirmer);
     }
 
     if args.refresh > 0 {
@@ -29,7 +35,8 @@ pub fn run(args: Args, ctx: &mut Context, palette: &Palette) -> Result<()> {
                 palette.status.apply_to("::")
             );
         }
-        crate::render::progress_indicatif::install(&ctx.alpm, args.noprogressbar, palette);
+        sink.borrow_mut().begin();
+        crate::common::progress::register(&ctx.alpm, sink.clone());
         let dbs = ctx.alpm.syncdbs_mut();
         let up_to_date = dbs.update(force)?;
         if !args.quiet {
@@ -57,7 +64,7 @@ pub fn run(args: Args, ctx: &mut Context, palette: &Palette) -> Result<()> {
     let do_install = !args.targets.is_empty() || args.sysupgrade > 0;
 
     if do_install {
-        return sync_install(&args, ctx, args.print, palette);
+        return sync_install(&args, ctx, args.print, palette, confirmer, sink);
     }
 
     if args.print {
@@ -388,7 +395,14 @@ fn expand_group<'a>(alpm: &'a Alpm, repo: Option<&str>, name: &str) -> Vec<&'a P
     out
 }
 
-fn sync_install(args: &Args, ctx: &mut Context, print_only: bool, palette: &Palette) -> Result<()> {
+fn sync_install(
+    args: &Args,
+    ctx: &mut Context,
+    print_only: bool,
+    palette: &Palette,
+    confirmer: &mut dyn Confirmer,
+    sink: &SharedSink,
+) -> Result<()> {
     apply_overwrites(&mut ctx.alpm, &args.overwrite)?;
     apply_ignores(&mut ctx.alpm, &args.ignore, &args.ignoregroup)?;
 
@@ -439,26 +453,26 @@ fn sync_install(args: &Args, ctx: &mut Context, print_only: bool, palette: &Pale
         return Ok(());
     }
 
-    print_summary(&targets, palette);
-
-    let prompt = if args.downloadonly {
-        "Proceed with download? [Y/n] "
+    let (kind, prompt) = if args.downloadonly {
+        (TransactionKind::DownloadOnly, "Proceed with download? [Y/n] ")
     } else {
-        "Proceed with installation? [Y/n] "
+        (TransactionKind::Install, "Proceed with installation? [Y/n] ")
     };
-    if should_prompt(args.noconfirm) && !confirm(prompt) {
+    let plan = TransactionPlan::with_targets(targets, kind, prompt);
+    if !confirmer.confirm(&plan) {
         guard.release()?;
         return Ok(());
     }
 
-    // Register the progress bars ONLY now -- after the summary + confirm output.
-    // indicatif's MultiProgress anchors its cursor where it's created; building
-    // it earlier (at registration) meant the summary/confirm println!s scrolled
-    // that anchor, so bar redraws cleared the wrong lines and the prompt jumped
-    // to the top of the screen. Creating it here (right before the transaction
-    // draws) keeps its line accounting correct.
+    // Register the progress callbacks ONLY now -- after the summary + confirm
+    // output. indicatif's MultiProgress anchors its cursor where it's created;
+    // building it earlier meant the summary/confirm println!s scrolled that
+    // anchor, so bar redraws cleared the wrong lines and the prompt jumped to
+    // the top of the screen. begin() here (right before the transaction draws)
+    // keeps its line accounting correct.
     if !print_only {
-        crate::render::progress_indicatif::install(guard.alpm(), args.noprogressbar, palette);
+        sink.borrow_mut().begin();
+        crate::common::progress::register(guard.alpm(), sink.clone());
     }
 
     commit(guard.alpm())?;
@@ -466,7 +480,7 @@ fn sync_install(args: &Args, ctx: &mut Context, print_only: bool, palette: &Pale
     Ok(())
 }
 
-fn sync_clean(args: &Args, ctx: &mut Context) -> Result<()> {
+fn sync_clean(args: &Args, ctx: &mut Context, confirmer: &mut dyn Confirmer) -> Result<()> {
     let installed: HashSet<(String, String)> = ctx
         .alpm
         .localdb()
@@ -484,7 +498,10 @@ fn sync_clean(args: &Args, ctx: &mut Context) -> Result<()> {
     } else {
         "Do you want to remove all other packages from cache? [Y/n] "
     };
-    if should_prompt(args.noconfirm) && !confirm(prompt) {
+    if !confirmer.confirm(&TransactionPlan::prompt_only(
+        TransactionKind::CleanCache,
+        prompt,
+    )) {
         return Ok(());
     }
 

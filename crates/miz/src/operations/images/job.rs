@@ -8,27 +8,27 @@
 //! forward `(id, status)` over a channel, and poll `Progress` on the main
 //! thread until the matching id arrives.
 
+use crate::common::progress::{ProgressEvent, SharedSink};
 use crate::error::{MizError, Result};
 use crate::operations::images::client::JobProxyBlocking;
-use crate::render::progress_indicatif::bar_style_job;
-use indicatif::ProgressBar;
 use std::sync::mpsc;
 use std::time::Duration;
 use zbus::blocking::Connection;
 use zbus::zvariant::OwnedObjectPath;
 
-/// Wait for job `id` (at `path`) to finish, rendering a progress bar unless
-/// `no_bar`. Returns Ok(()) on status 0, else a `Sysupdate` error describing
-/// the failure. `removed` is a pre-subscribed `JobRemoved` signal iterator
-/// (subscribed BEFORE the Acquire/Install call to avoid a race window). `label`
-/// is the left-margin verb shown on the bar (e.g. "acquiring", "installing").
+/// Wait for job `id` (at `path`) to finish, emitting progress into `sink`.
+/// Returns Ok(()) on status 0, else a `Sysupdate` error describing the failure.
+/// `removed` is a pre-subscribed `JobRemoved` signal iterator (subscribed BEFORE
+/// the Acquire/Install call to avoid a race window). `label` is the left-margin
+/// verb shown on the bar (e.g. "acquiring", "installing"). Whether a bar is
+/// actually drawn is the sink's decision (see `IndicatifSink`).
 pub fn wait<I>(
     conn: &Connection,
     path: &OwnedObjectPath,
     id: u64,
-    no_bar: bool,
     removed: I,
     label: &str,
+    sink: &SharedSink,
 ) -> Result<()>
 where
     I: Iterator<Item = (u64, i32)> + Send + 'static,
@@ -48,24 +48,15 @@ where
         .build()
         .ok();
 
-    let bar = if no_bar {
-        None
-    } else {
-        // A dedicated style whose prefix carries the verb; the transaction
-        // style (`bar_style_op`) expects a per-package {msg} and left an empty
-        // 12-col prefix + blank trailing text on this D-Bus job bar.
-        let b = ProgressBar::new(100).with_style(bar_style_job());
-        b.set_prefix(label.to_string());
-        b.enable_steady_tick(Duration::from_millis(120));
-        Some(b)
-    };
+    sink.borrow_mut().handle(ProgressEvent::JobBegin {
+        label: label.to_string(),
+    });
 
     let status = loop {
-        if let Some(b) = &bar {
-            if let Some(j) = &job {
-                if let Ok(p) = j.progress() {
-                    b.set_position(p as u64);
-                }
+        if let Some(j) = &job {
+            if let Ok(p) = j.progress() {
+                sink.borrow_mut()
+                    .handle(ProgressEvent::Job { percent: p as u64 });
             }
         }
         match rx.recv_timeout(Duration::from_millis(200)) {
@@ -77,9 +68,7 @@ where
                 // outcome is unknown; for an OS-mutating op, surface that rather
                 // than assuming success.
                 let _ = handle.join();
-                if let Some(b) = bar {
-                    b.finish_and_clear();
-                }
+                sink.borrow_mut().handle(ProgressEvent::JobEnd);
                 return Err(MizError::Sysupdate(format!(
                     "lost track of update job {id} before completion (no JobRemoved signal)"
                 )));
@@ -88,9 +77,7 @@ where
     };
 
     let _ = handle.join();
-    if let Some(b) = bar {
-        b.finish_and_clear();
-    }
+    sink.borrow_mut().handle(ProgressEvent::JobEnd);
 
     match status {
         0 => Ok(()),

@@ -1,2 +1,9 @@
+pub mod confirm;
+pub mod database;
+pub mod deptest;
+pub mod files;
+pub mod fmt;
 pub mod palette;
 pub mod progress_indicatif;
+pub mod query;
+pub mod version;

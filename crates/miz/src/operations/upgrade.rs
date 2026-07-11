@@ -1,16 +1,19 @@
+use crate::common::progress::SharedSink;
+use crate::common::report::{Confirmer, TransactionKind, TransactionPlan};
+use crate::common::transaction::{collect_pkgs, commit, format_print_line, prepare, TransGuard};
 use crate::config::Context;
 use crate::error::{MizError, Result};
-use crate::common::transaction::{
-    collect_pkgs, commit, confirm, format_print_line, prepare, print_summary, should_prompt,
-    TransGuard,
-};
-use crate::render::palette::Palette;
 use alpm::{Alpm, Package, SigLevel, TransFlag};
 use std::path::{Path, PathBuf};
 
 pub use crate::cli::args::upgrade::Args;
 
-pub fn run(args: Args, ctx: &mut Context, palette: &Palette) -> Result<()> {
+pub fn run(
+    args: Args,
+    ctx: &mut Context,
+    confirmer: &mut dyn Confirmer,
+    sink: &SharedSink,
+) -> Result<()> {
     apply_overwrites(&mut ctx.alpm, &args.overwrite)?;
     let flags = build_flags(&args);
 
@@ -28,16 +31,20 @@ pub fn run(args: Args, ctx: &mut Context, palette: &Palette) -> Result<()> {
         return Ok(());
     }
 
-    print_summary(&targets, palette);
-
-    if should_prompt(args.noconfirm) && !confirm("Proceed with installation? [Y/n] ") {
+    let plan = TransactionPlan::with_targets(
+        targets,
+        TransactionKind::Install,
+        "Proceed with installation? [Y/n] ",
+    );
+    if !confirmer.confirm(&plan) {
         guard.release()?;
         return Ok(());
     }
 
-    // Register progress bars only after the summary/confirm output, so indicatif
-    // anchors its cursor correctly (see the note in sync::sync_install).
-    crate::render::progress_indicatif::install(guard.alpm(), args.noprogressbar, palette);
+    // Register progress callbacks only after the summary/confirm output, so the
+    // sink's live display anchors its cursor correctly (see sync::sync_install).
+    sink.borrow_mut().begin();
+    crate::common::progress::register(guard.alpm(), sink.clone());
     commit(guard.alpm())?;
     guard.release()?;
     Ok(())

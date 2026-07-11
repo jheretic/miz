@@ -1,25 +1,20 @@
+use crate::common::report::DeptestReport;
 use crate::config::Context;
-use crate::error::{MizError, Result};
+use crate::error::Result;
 
 pub use crate::cli::args::deptest::Args;
 
-pub fn run(args: Args, ctx: &Context) -> Result<()> {
+pub fn run(args: Args, ctx: &Context) -> Result<DeptestReport> {
+    let mut missing = Vec::new();
     if args.deps.is_empty() {
-        return Ok(());
+        return Ok(DeptestReport { missing });
     }
 
     let pkgs = ctx.alpm.localdb().pkgs();
-    let mut missing = false;
     for dep in &args.deps {
         if pkgs.find_satisfier(dep.as_str()).is_none() {
-            println!("{dep}");
-            missing = true;
+            missing.push(dep.clone());
         }
     }
-
-    if missing {
-        Err(MizError::Deptest)
-    } else {
-        Ok(())
-    }
+    Ok(DeptestReport { missing })
 }

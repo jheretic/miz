@@ -51,10 +51,11 @@
 //!   tell the operator to delete it.
 //! - root is not btrfs, or the new `/usr`/UKI cannot be located: refuse.
 
+use crate::common::osrelease;
+use crate::common::progress::SharedSink;
+use crate::common::transaction::{commit, prepare, TransGuard};
 use crate::config;
 use crate::error::{MizError, Result};
-use crate::common::osrelease;
-use crate::common::transaction::{commit, prepare, TransGuard};
 use alpm::TransFlag;
 use object::read::pe::PeFile64;
 use object::{Object, ObjectSection};
@@ -609,7 +610,7 @@ fn render_plan(plan: &RelayPlan) -> String {
 /// `miz -I --reinstall-layered [<version>]`: run the relay standalone (e.g. to
 /// preview with `--dry-run`, or re-run after a manual sysupdate). The primary
 /// path is [`relay_after_upgrade`], invoked automatically by `-Iu`.
-pub fn run(args: Args, _config_path: Option<&Path>) -> Result<()> {
+pub fn run(args: Args, _config_path: Option<&Path>, sink: &SharedSink) -> Result<()> {
     let running = osrelease::booted_image_version();
     let new_version = args.targets.first().cloned();
 
@@ -628,13 +629,18 @@ pub fn run(args: Args, _config_path: Option<&Path>) -> Result<()> {
                 .to_string(),
         )
     })?;
-    live_execute(&new_version, args.quiet)
+    live_execute(&new_version, args.quiet, sink)
 }
 
 /// Invoked by `images_upgrade` after sysupdate has installed `new_version` to
 /// the inactive slot. Snapshots the root per version and upgrades layered
 /// packages against the new image (see module docs).
-pub fn relay_after_upgrade(new_version: &str, dry_run: bool, quiet: bool) -> Result<()> {
+pub fn relay_after_upgrade(
+    new_version: &str,
+    dry_run: bool,
+    quiet: bool,
+    sink: &SharedSink,
+) -> Result<()> {
     if dry_run {
         let running = osrelease::booted_image_version();
         print!(
@@ -643,7 +649,7 @@ pub fn relay_after_upgrade(new_version: &str, dry_run: bool, quiet: bool) -> Res
         );
         return Ok(());
     }
-    live_execute(new_version, quiet)
+    live_execute(new_version, quiet, sink)
 }
 
 // ---------------------------------------------------------------------------
@@ -653,7 +659,7 @@ pub fn relay_after_upgrade(new_version: &str, dry_run: bool, quiet: bool) -> Res
 /// The real relay sequence. Nested so cleanup unwinds in the correct order via
 /// [`Teardown`]. Fails closed at each precondition; only the final `-Syu` commit
 /// mutates persistent state, and the new snapshot is deleted on any failure.
-fn live_execute(new_version: &str, quiet: bool) -> Result<()> {
+fn live_execute(new_version: &str, quiet: bool, sink: &SharedSink) -> Result<()> {
     let running = osrelease::booted_image_version().ok_or_else(|| {
         MizError::Other(
             "cannot determine the running IMAGE_VERSION from os-release; cannot name \
@@ -885,7 +891,7 @@ fn live_execute(new_version: &str, quiet: bool) -> Result<()> {
     let mut ctx =
         config::build_for_root_rerooted(&canon_root, &dbpath, &image_db, archive_date.as_deref())?;
 
-    sysupgrade_into(&mut ctx, quiet)?;
+    sysupgrade_into(&mut ctx, quiet, sink)?;
 
     // Install the per-version rootflags addon beside the new UKI on the ESP, so
     // it boots @archetype_<new_version>. rootflags=subvol= is NOT in the base UKI
@@ -940,7 +946,7 @@ fn live_execute(new_version: &str, quiet: bool) -> Result<()> {
 /// Refresh the sync dbs and upgrade all layered packages (`-Syu`) against the
 /// re-rooted Context. Mirrors `sync::sync_install`'s guard/prepare/commit flow.
 /// A no-op transaction (nothing to upgrade) releases cleanly.
-fn sysupgrade_into(ctx: &mut config::Context, _quiet: bool) -> Result<()> {
+fn sysupgrade_into(ctx: &mut config::Context, _quiet: bool, sink: &SharedSink) -> Result<()> {
     {
         let dbs = ctx.alpm.syncdbs_mut();
         // force=true: refresh the sync dbs UNCONDITIONALLY. A normal (force=false)
@@ -960,6 +966,8 @@ fn sysupgrade_into(ctx: &mut config::Context, _quiet: bool) -> Result<()> {
         guard.release()?;
         return Ok(());
     }
+    sink.borrow_mut().begin();
+    crate::common::progress::register(guard.alpm(), sink.clone());
     commit(guard.alpm())?;
     guard.release()?;
     Ok(())

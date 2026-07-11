@@ -43,22 +43,67 @@ fn dispatch(cli: Cli) -> error::Result<()> {
         (None, None)
     };
     let config_path = cli.config.clone();
+    // Construct the confirm + progress seam implementations for the committing
+    // verbs. The sink is shared (Rc<RefCell>) because libalpm's callback
+    // registration stores 'static closures; core clones the handle into each.
+    let make_seams = |noconfirm: bool, noprogressbar: bool| {
+        let pal = palette.clone().unwrap_or_else(|| render::palette::Palette::resolve(true));
+        let confirmer = render::confirm::TtyConfirmer::new(pal.clone(), noconfirm);
+        let sink: common::progress::SharedSink =
+            std::rc::Rc::new(std::cell::RefCell::new(render::progress_indicatif::IndicatifSink::new(
+                !noprogressbar,
+                &pal,
+            )));
+        (confirmer, sink)
+    };
     match cli.op {
-        Operation::Database(args) => operations::database::run(args, ctx.as_ref().unwrap()),
-        Operation::Query(args) => operations::query::run(args, ctx.as_ref().unwrap()),
+        Operation::Database(args) => {
+            let report = operations::database::run(args, ctx.as_ref().unwrap())?;
+            render::database::render(&report);
+            report.outcome()
+        }
+        Operation::Query(args) => {
+            let report = operations::query::run(args, ctx.as_ref().unwrap())?;
+            render::query::render(&report);
+            report.outcome()
+        }
         Operation::Remove(args) => {
-            operations::remove::run(args, ctx.as_mut().unwrap(), palette.as_ref().unwrap())
+            let (mut confirmer, sink) = make_seams(args.noconfirm, args.noprogressbar);
+            operations::remove::run(args, ctx.as_mut().unwrap(), &mut confirmer, &sink)
         }
         Operation::Sync(args) => {
-            operations::sync::run(args, ctx.as_mut().unwrap(), palette.as_ref().unwrap())
+            let (mut confirmer, sink) = make_seams(args.noconfirm, args.noprogressbar);
+            operations::sync::run(
+                args,
+                ctx.as_mut().unwrap(),
+                palette.as_ref().unwrap(),
+                &mut confirmer,
+                &sink,
+            )
         }
-        Operation::Deptest(args) => operations::deptest::run(args, ctx.as_ref().unwrap()),
+        Operation::Deptest(args) => {
+            let report = operations::deptest::run(args, ctx.as_ref().unwrap())?;
+            render::deptest::render(&report);
+            report.outcome()
+        }
         Operation::Upgrade(args) => {
-            operations::upgrade::run(args, ctx.as_mut().unwrap(), palette.as_ref().unwrap())
+            let (mut confirmer, sink) = make_seams(args.noconfirm, args.noprogressbar);
+            operations::upgrade::run(args, ctx.as_mut().unwrap(), &mut confirmer, &sink)
         }
-        Operation::Files(args) => operations::files::run(args, ctx.as_mut().unwrap()),
-        Operation::Version => operations::version::run(),
-        Operation::Images(args) => operations::images::run(args, config_path.as_deref()),
+        Operation::Files(args) => {
+            let report = operations::files::run(args, ctx.as_mut().unwrap())?;
+            render::files::render(&report);
+            report.outcome()
+        }
+        Operation::Version => {
+            let report = operations::version::run()?;
+            render::version::render(&report);
+            Ok(())
+        }
+        Operation::Images(args) => {
+            let (mut confirmer, sink) = make_seams(args.noconfirm, args.noprogressbar);
+            operations::images::run(args, config_path.as_deref(), &mut confirmer, &sink)
+        }
         Operation::Completions { shell } => operations::completions::run(shell),
     }
 }

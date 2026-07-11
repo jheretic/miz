@@ -1,10 +1,10 @@
 //! Pacman-style rendering for `-Il`/`-Ii`/`-Ig`. Pure string builders so the
 //! shapes can be golden-tested without a bus. Reuses the `pub(crate)`
-//! formatters in `query.rs` (`format_size`/`format_date`) rather than
+//! formatters in `common::fmt` (`format_size`/`format_date`) rather than
 //! duplicating them.
 
 use super::describe::{Describe, Feature};
-use crate::operations::query::{format_date, format_size};
+use crate::common::fmt::{format_date, format_size};
 
 /// One `-Il` row. Mirrors `sync::sync_list`'s `{repo} {pkg} {ver}{suffix}`:
 /// here `{component} {version}{suffix}` with `[installed]`/`[newest]` markers.

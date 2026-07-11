@@ -13,8 +13,9 @@ mod format;
 mod job;
 mod relay;
 
+use crate::common::progress::SharedSink;
+use crate::common::report::{Confirmer, TransactionKind, TransactionPlan};
 use crate::error::{MizError, Result};
-use crate::common::transaction::{confirm, should_prompt};
 use client::{
     map_call_error, Login1ProxyBlocking, ManagerProxyBlocking, TargetProxyBlocking, FLAG_OFFLINE,
 };
@@ -25,13 +26,18 @@ pub use crate::cli::args::images::Args;
 /// A `Manager.ListTargets` row: (class, name, object path).
 type TargetEntry = (String, String, zbus::zvariant::OwnedObjectPath);
 
-pub fn run(args: Args, config_path: Option<&std::path::Path>) -> Result<()> {
+pub fn run(
+    args: Args,
+    config_path: Option<&std::path::Path>,
+    confirmer: &mut dyn Confirmer,
+    sink: &SharedSink,
+) -> Result<()> {
     // Split-db image update: re-lay layered packages onto the new A/B image +
     // snapshot. Context-bearing (relay builds its own /run-rooted handle), so
     // it stays out of main.rs's needs_context path. Handled first so it never
     // falls through to the D-Bus verbs.
     if args.reinstall_layered {
-        return relay::run(args, config_path);
+        return relay::run(args, config_path, sink);
     }
     if args.list {
         return images_list(&args);
@@ -55,7 +61,7 @@ pub fn run(args: Args, config_path: Option<&std::path::Path>) -> Result<()> {
         return images_features(&args);
     }
     if args.upgrade > 0 {
-        return images_upgrade(&args);
+        return images_upgrade(&args, confirmer, sink);
     }
     if args.clean > 0 {
         return images_vacuum(&args);
@@ -382,7 +388,11 @@ fn images_appstream(args: &Args) -> Result<()> {
     Ok(())
 }
 
-fn images_upgrade(args: &Args) -> Result<()> {
+fn images_upgrade(
+    args: &Args,
+    confirmer: &mut dyn Confirmer,
+    sink: &SharedSink,
+) -> Result<()> {
     let (conn, targets) = connect()?;
     let (component, version) = split_component(args.targets.first().map(String::as_str));
     let (name, proxy) = resolve_target(&conn, &targets, component)?;
@@ -424,9 +434,12 @@ fn images_upgrade(args: &Args) -> Result<()> {
         .filter_map(|sig| sig.args().ok().map(|a| (a.id, a.status)));
 
     let (acq_ver, acq_id, acq_path) = proxy.acquire(&acquire_arg, 0).map_err(map_call_error)?;
-    job::wait(&conn, &acq_path, acq_id, args.noprogressbar, removed, "acquiring")?;
+    job::wait(&conn, &acq_path, acq_id, removed, "acquiring", sink)?;
 
-    if should_prompt(args.noconfirm) && !confirm("Proceed with installation? [Y/n] ") {
+    if !confirmer.confirm(&TransactionPlan::prompt_only(
+        TransactionKind::ImageInstall,
+        "Proceed with installation? [Y/n] ",
+    )) {
         return Ok(());
     }
 
@@ -436,7 +449,7 @@ fn images_upgrade(args: &Args) -> Result<()> {
         .map_err(map_call_error)?
         .filter_map(|sig| sig.args().ok().map(|a| (a.id, a.status)));
     let (_iv, ins_id, ins_path) = proxy.install(&acq_ver, 0).map_err(map_call_error)?;
-    job::wait(&conn, &ins_path, ins_id, args.noprogressbar, removed, "installing")?;
+    job::wait(&conn, &ins_path, ins_id, removed, "installing", sink)?;
 
     if !args.quiet {
         if host_changed {
@@ -457,7 +470,7 @@ fn images_upgrade(args: &Args) -> Result<()> {
     // has no root-snapshot coupling, and would make the relay try to re-create
     // the already-existing @archetype_<version> subvol (fail-closed).
     if component == "host" && host_changed {
-        relay::relay_after_upgrade(&acq_ver, args.dry_run, args.quiet)?;
+        relay::relay_after_upgrade(&acq_ver, args.dry_run, args.quiet, sink)?;
     }
 
     if args.reboot {
