@@ -386,11 +386,34 @@ fn images_upgrade(args: &Args) -> Result<()> {
     let (conn, targets) = connect()?;
     let (component, version) = split_component(args.targets.first().map(String::as_str));
     let (name, proxy) = resolve_target(&conn, &targets, component)?;
-    // "" lets sysupdate pick newest; a pinned version uses the
-    // update-to-version polkit action (admin auth).
-    // TODO(phase3/live): confirm against a real systemd 257+ host that ""
-    // selects newest for Acquire (same unverified assumption as -Ii's Describe).
-    let version = version.unwrap_or("");
+
+    // Resolve what to acquire, and how.
+    //
+    // The version argument selects the polkit action (org.freedesktop.
+    // sysupdate1(5)): an EMPTY version uses `update` (permitted without admin
+    // auth); a SPECIFIC version uses `update-to-version` (admin auth). So the
+    // routine newest-upgrade path MUST pass "" to stay auth-free.
+    //
+    // A newly enabled OPTIONAL FEATURE, however, only installs when we acquire a
+    // concrete version: feature transfers update "in lock-step with the rest of
+    // their target" (sysupdate.features(5)) and are not independently
+    // installable, so a bare Acquire("") when the host is already newest is a
+    // no-op and the feature never downloads. The documented remedy (GetVersion)
+    // is to "extend the newest existing installation in-place" by acquiring the
+    // installed version, which completes that now-`incomplete` version and pulls
+    // the feature's instance. That necessarily uses update-to-version (admin
+    // auth) -- acceptable, since enabling the feature was itself admin-gated.
+    let plan = match version {
+        Some(v) => UpgradePlan::ToVersion(v.to_string()),
+        None => resolve_upgrade_plan(&proxy)?,
+    };
+    if matches!(plan, UpgradePlan::UpToDate) {
+        if !args.quiet {
+            eprintln!("{name}: already up to date");
+        }
+        return Ok(());
+    }
+    let (acquire_arg, host_changed) = acquire_args(&plan);
 
     // Subscribe to JobRemoved BEFORE Acquire so a fast job can't finish in the
     // gap. Adapt the raw signal iterator into (id, status) for job::wait.
@@ -400,8 +423,7 @@ fn images_upgrade(args: &Args) -> Result<()> {
         .map_err(map_call_error)?
         .filter_map(|sig| sig.args().ok().map(|a| (a.id, a.status)));
 
-    // Acquire (download). No-version form is the no-auth `update` action.
-    let (acq_ver, acq_id, acq_path) = proxy.acquire(version, 0).map_err(map_call_error)?;
+    let (acq_ver, acq_id, acq_path) = proxy.acquire(&acquire_arg, 0).map_err(map_call_error)?;
     job::wait(&conn, &acq_path, acq_id, args.noprogressbar, removed, "acquiring")?;
 
     if should_prompt(args.noconfirm) && !confirm("Proceed with installation? [Y/n] ") {
@@ -417,15 +439,24 @@ fn images_upgrade(args: &Args) -> Result<()> {
     job::wait(&conn, &ins_path, ins_id, args.noprogressbar, removed, "installing")?;
 
     if !args.quiet {
-        println!("{name}: updated to {acq_ver}");
+        if host_changed {
+            println!("{name}: updated to {acq_ver}");
+        } else {
+            // In-place completion (e.g. a newly enabled feature): the version
+            // didn't advance, so "updated to" would be misleading.
+            println!("{name}: {acq_ver} completed (in place)");
+        }
     }
 
     // Default named-subvolume relay: sysupdate has written the new /usr + UKI to
     // the inactive slot; now snapshot the root per version and upgrade layered
     // packages against the new image so a /usr rollback keeps them consistent
-    // (see relay module docs). Only for the host component (the /usr image);
-    // optional feature/sysext updates have no layered-root coupling.
-    if component == "host" {
+    // (see relay module docs). Only for the host component (the /usr image), and
+    // only when the host version ACTUALLY advanced -- an in-place completion of
+    // the installed version (feature download) touched only /var/lib/extensions,
+    // has no root-snapshot coupling, and would make the relay try to re-create
+    // the already-existing @archetype_<version> subvol (fail-closed).
+    if component == "host" && host_changed {
         relay::relay_after_upgrade(&acq_ver, args.dry_run, args.quiet)?;
     }
 
@@ -433,6 +464,66 @@ fn images_upgrade(args: &Args) -> Result<()> {
         return do_reboot(&conn);
     }
     Ok(())
+}
+
+/// Outcome of resolving a bare `-Iu` (no explicit version).
+enum UpgradePlan {
+    /// A newer version is available; acquire newest (empty arg, no-auth).
+    Newest,
+    /// No newer version, but the installed one is incomplete (e.g. a newly
+    /// enabled feature); re-acquire this exact version to complete it in place.
+    Complete(String),
+    /// A user-supplied explicit version (update-to-version).
+    ToVersion(String),
+    /// Nothing to do.
+    UpToDate,
+}
+
+/// Map an [`UpgradePlan`] to the `Acquire`/`Install` version argument and
+/// whether the host version advances. Pure, so the polkit-critical invariant is
+/// testable: `Newest` MUST pass an empty arg (org.freedesktop.sysupdate1.update,
+/// no admin auth); a concrete version triggers update-to-version (admin auth).
+/// `host_changed` gates the root-snapshot relay -- true only when the host `/usr`
+/// actually advances, false for an in-place completion (feature download).
+/// `UpToDate` is handled by the caller before this is reached.
+fn acquire_args(plan: &UpgradePlan) -> (String, bool) {
+    match plan {
+        UpgradePlan::Newest => (String::new(), true),
+        UpgradePlan::Complete(v) => (v.clone(), false),
+        UpgradePlan::ToVersion(v) => (v.clone(), true),
+        UpgradePlan::UpToDate => (String::new(), false),
+    }
+}
+
+/// Decide what a bare `-Iu` should do:
+///
+/// * `CheckNew` non-empty -> [`UpgradePlan::Newest`] (relay runs for host).
+/// * else installed version is `incomplete` -> [`UpgradePlan::Complete`]
+///   (a feature was enabled but its instance isn't downloaded; complete it in
+///   place, no relay).
+/// * else [`UpgradePlan::UpToDate`].
+fn resolve_upgrade_plan(proxy: &TargetProxyBlocking<'_>) -> Result<UpgradePlan> {
+    let newest = proxy.check_new().unwrap_or_default();
+    if !newest.is_empty() {
+        return Ok(UpgradePlan::Newest);
+    }
+    // No newer version. Complete the installed one only if it is incomplete, so
+    // a plain no-op `-Iu` stays a no-op (never re-installs needlessly).
+    let installed = proxy.get_version().unwrap_or_default();
+    if installed.is_empty() {
+        return Ok(UpgradePlan::UpToDate);
+    }
+    let incomplete = proxy
+        .describe(&installed, 0)
+        .ok()
+        .and_then(|json| Describe::parse(&json).ok())
+        .and_then(|d| d.incomplete)
+        .unwrap_or(false);
+    if incomplete {
+        Ok(UpgradePlan::Complete(installed))
+    } else {
+        Ok(UpgradePlan::UpToDate)
+    }
 }
 
 fn images_vacuum(args: &Args) -> Result<()> {
@@ -466,7 +557,33 @@ fn do_reboot(conn: &zbus::blocking::Connection) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{list_flags, split_component, FLAG_OFFLINE};
+    use super::{acquire_args, list_flags, split_component, UpgradePlan, FLAG_OFFLINE};
+
+    #[test]
+    fn acquire_args_newest_uses_empty_arg_for_no_auth_update() {
+        // Empty version arg -> org.freedesktop.sysupdate1.update (no admin auth).
+        // A concrete version would trigger update-to-version (admin auth), so the
+        // routine newest upgrade MUST pass "".
+        let (arg, host_changed) = acquire_args(&UpgradePlan::Newest);
+        assert_eq!(arg, "");
+        assert!(host_changed);
+    }
+
+    #[test]
+    fn acquire_args_complete_uses_installed_version_without_host_change() {
+        // In-place completion (newly enabled feature): explicit version, and the
+        // host did NOT advance -> relay must not run.
+        let (arg, host_changed) = acquire_args(&UpgradePlan::Complete("2026.07.10-1".into()));
+        assert_eq!(arg, "2026.07.10-1");
+        assert!(!host_changed);
+    }
+
+    #[test]
+    fn acquire_args_to_version_passes_version_and_advances() {
+        let (arg, host_changed) = acquire_args(&UpgradePlan::ToVersion("2026.07.09-1".into()));
+        assert_eq!(arg, "2026.07.09-1");
+        assert!(host_changed);
+    }
 
     #[test]
     fn list_flags_offline_sets_bit() {
