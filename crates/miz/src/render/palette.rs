@@ -2,8 +2,9 @@
 //!
 //! Color is OFF by default (built-in), ON in the shipped vendor config
 //! (`/usr/lib/miz/miz.toml` sets `[options] color = true`). The effective choice
-//! is resolved ONCE into a [`Palette`] stored on the [`crate::config::Context`],
-//! then read by the print sites. Resolution precedence (strongest first):
+//! is resolved ONCE into a [`Palette`] in `main.rs` (from the loaded config's
+//! `color` option), then threaded into the operations. Resolution precedence
+//! (strongest first):
 //!
 //! 1. `NO_COLOR` set to a non-empty value (https://no-color.org/) -> off.
 //! 2. Output stream is not a TTY (piped/redirected) -> off.

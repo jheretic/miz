@@ -236,7 +236,7 @@ pub(crate) fn format_print_line(pkg: &Package, format: Option<&str>) -> String {
     }
 }
 
-pub(crate) fn print_summary(targets: &[(String, String)], palette: &crate::style::Palette) {
+pub(crate) fn print_summary(targets: &[(String, String)], palette: &crate::render::palette::Palette) {
     let total = targets.len();
     eprintln!();
     eprintln!(

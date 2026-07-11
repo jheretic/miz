@@ -1,4 +1,4 @@
-use crate::style::Palette;
+use crate::render::palette::Palette;
 use alpm::{Alpm, DownloadEvent, Event, Progress};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::collections::HashMap;

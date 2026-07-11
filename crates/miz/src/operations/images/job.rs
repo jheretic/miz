@@ -10,7 +10,7 @@
 
 use crate::error::{MizError, Result};
 use crate::operations::images::client::JobProxyBlocking;
-use crate::operations::progress::bar_style_job;
+use crate::render::progress_indicatif::bar_style_job;
 use indicatif::ProgressBar;
 use std::sync::mpsc;
 use std::time::Duration;

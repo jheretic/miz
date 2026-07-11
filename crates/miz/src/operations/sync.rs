@@ -3,16 +3,17 @@ use crate::error::{MizError, Result};
 use crate::operations::query::{
     format_date, format_size, format_validation, join_dep_list, join_list_str, join_optdeps,
 };
-use crate::operations::transaction::{
+use crate::common::transaction::{
     collect_pkgs, commit, confirm, prepare, print_summary, should_prompt, TransGuard,
 };
+use crate::render::palette::Palette;
 use alpm::{Alpm, Db, Package, Pkg, TransFlag};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
 pub use crate::cli::args::sync::Args;
 
-pub fn run(args: Args, ctx: &mut Context) -> Result<()> {
+pub fn run(args: Args, ctx: &mut Context, palette: &Palette) -> Result<()> {
     if args.clean > 0 {
         return sync_clean(&args, ctx);
     }
@@ -25,10 +26,10 @@ pub fn run(args: Args, ctx: &mut Context) -> Result<()> {
         if !args.quiet {
             eprintln!(
                 "{} Synchronizing package databases...",
-                ctx.palette.status.apply_to("::")
+                palette.status.apply_to("::")
             );
         }
-        crate::operations::progress::install(&ctx.alpm, args.noprogressbar, &ctx.palette);
+        crate::render::progress_indicatif::install(&ctx.alpm, args.noprogressbar, palette);
         let dbs = ctx.alpm.syncdbs_mut();
         let up_to_date = dbs.update(force)?;
         if !args.quiet {
@@ -44,19 +45,19 @@ pub fn run(args: Args, ctx: &mut Context) -> Result<()> {
         return sync_search(&args, ctx, re);
     }
     if args.list {
-        return sync_list(&args, ctx);
+        return sync_list(&args, ctx, palette);
     }
     if args.groups {
-        return sync_groups(&args, ctx);
+        return sync_groups(&args, ctx, palette);
     }
     if args.info > 0 {
-        return sync_info(&args, ctx);
+        return sync_info(&args, ctx, palette);
     }
 
     let do_install = !args.targets.is_empty() || args.sysupgrade > 0;
 
     if do_install {
-        return sync_install(&args, ctx, args.print);
+        return sync_install(&args, ctx, args.print, palette);
     }
 
     if args.print {
@@ -104,7 +105,7 @@ fn sync_search(args: &Args, ctx: &Context, pattern: &str) -> Result<()> {
     Ok(())
 }
 
-fn sync_list(args: &Args, ctx: &Context) -> Result<()> {
+fn sync_list(args: &Args, ctx: &Context, palette: &Palette) -> Result<()> {
     let installed: HashSet<String> = ctx
         .alpm
         .localdb()
@@ -123,7 +124,7 @@ fn sync_list(args: &Args, ctx: &Context) -> Result<()> {
                 None => {
                     eprintln!(
                         "{} repository '{name}' was not found",
-                        ctx.palette.error.apply_to("error:")
+                        palette.error.apply_to("error:")
                     );
                     return Err(MizError::PackageNotFound(name.clone()));
                 }
@@ -149,7 +150,7 @@ fn sync_list(args: &Args, ctx: &Context) -> Result<()> {
     Ok(())
 }
 
-fn sync_groups(args: &Args, ctx: &Context) -> Result<()> {
+fn sync_groups(args: &Args, ctx: &Context, palette: &Palette) -> Result<()> {
     if args.targets.is_empty() {
         let mut seen: HashSet<String> = HashSet::new();
         for db in ctx.alpm.syncdbs() {
@@ -182,7 +183,7 @@ fn sync_groups(args: &Args, ctx: &Context) -> Result<()> {
         if !found {
             eprintln!(
                 "{} group '{name}' was not found",
-                ctx.palette.error.apply_to("error:")
+                palette.error.apply_to("error:")
             );
             any_missing = true;
         }
@@ -193,7 +194,7 @@ fn sync_groups(args: &Args, ctx: &Context) -> Result<()> {
     Ok(())
 }
 
-fn sync_info(args: &Args, ctx: &Context) -> Result<()> {
+fn sync_info(args: &Args, ctx: &Context, palette: &Palette) -> Result<()> {
     if args.targets.is_empty() {
         for db in ctx.alpm.syncdbs() {
             for pkg in db.pkgs() {
@@ -222,7 +223,7 @@ fn sync_info(args: &Args, ctx: &Context) -> Result<()> {
         if !found {
             eprintln!(
                 "{} package '{name}' was not found",
-                ctx.palette.error.apply_to("error:")
+                palette.error.apply_to("error:")
             );
             missing = true;
         }
@@ -387,7 +388,7 @@ fn expand_group<'a>(alpm: &'a Alpm, repo: Option<&str>, name: &str) -> Vec<&'a P
     out
 }
 
-fn sync_install(args: &Args, ctx: &mut Context, print_only: bool) -> Result<()> {
+fn sync_install(args: &Args, ctx: &mut Context, print_only: bool, palette: &Palette) -> Result<()> {
     apply_overwrites(&mut ctx.alpm, &args.overwrite)?;
     apply_ignores(&mut ctx.alpm, &args.ignore, &args.ignoregroup)?;
 
@@ -416,7 +417,7 @@ fn sync_install(args: &Args, ctx: &mut Context, print_only: bool) -> Result<()> 
             .trans_add()
             .iter()
             .map(|p: &Package| match format {
-                Some(fmt) => crate::operations::transaction::render_format(fmt, p),
+                Some(fmt) => crate::common::transaction::render_format(fmt, p),
                 None => format_print_target(p),
             })
             .collect();
@@ -426,7 +427,7 @@ fn sync_install(args: &Args, ctx: &mut Context, print_only: bool) -> Result<()> 
         if let Err(e) = guard.release() {
             eprintln!(
                 "{} trans_release failed after --print: {e}",
-                ctx.palette.warning.apply_to("warning:")
+                palette.warning.apply_to("warning:")
             );
         }
         return Ok(());
@@ -438,7 +439,7 @@ fn sync_install(args: &Args, ctx: &mut Context, print_only: bool) -> Result<()> 
         return Ok(());
     }
 
-    print_summary(&targets, &ctx.palette);
+    print_summary(&targets, palette);
 
     let prompt = if args.downloadonly {
         "Proceed with download? [Y/n] "
@@ -457,7 +458,7 @@ fn sync_install(args: &Args, ctx: &mut Context, print_only: bool) -> Result<()> 
     // to the top of the screen. Creating it here (right before the transaction
     // draws) keeps its line accounting correct.
     if !print_only {
-        crate::operations::progress::install(guard.alpm(), args.noprogressbar, &ctx.palette);
+        crate::render::progress_indicatif::install(guard.alpm(), args.noprogressbar, palette);
     }
 
     commit(guard.alpm())?;

@@ -28,17 +28,17 @@ pub fn run(args: Args, ctx: &Context) -> Result<()> {
 /// when no image db is configured. Call sites decide whether to skip
 /// localdb-shadowed names; this returns the raw set so `-Qi <name>` on an image
 /// package that is ALSO layered still resolves.
-fn image_packages(ctx: &Context) -> Vec<crate::operations::imagedb::ImagePackage> {
+fn image_packages(ctx: &Context) -> Vec<crate::common::imagedb::ImagePackage> {
     ctx.image_db
         .as_deref()
-        .map(crate::operations::imagedb::all_packages)
+        .map(crate::common::imagedb::all_packages)
         .unwrap_or_default()
 }
 
 /// The image packages NOT shadowed by a localdb (overlay) package -- the set to
 /// UNION into whole-system listings/filters so a layered package is reported
 /// once (from the localdb, which has richer alpm metadata).
-fn image_packages_unshadowed(ctx: &Context) -> Vec<crate::operations::imagedb::ImagePackage> {
+fn image_packages_unshadowed(ctx: &Context) -> Vec<crate::common::imagedb::ImagePackage> {
     image_packages(ctx)
         .into_iter()
         .filter(|p| ctx.alpm.localdb().pkg(p.name.as_bytes()).is_err())
@@ -48,7 +48,7 @@ fn image_packages_unshadowed(ctx: &Context) -> Vec<crate::operations::imagedb::I
 /// Render a package-info block for a baked-in /usr (image-db) package. Layout
 /// mirrors [`print_info`]. Fields the image db genuinely lacks (reverse-deps,
 /// validation) are omitted rather than faked.
-fn print_image_info(args: &Args, pkg: &crate::operations::imagedb::ImagePackage) {
+fn print_image_info(args: &Args, pkg: &crate::common::imagedb::ImagePackage) {
     let label = |k: &str, v: &str| println!("{:<19}: {}", k, v);
     let none = |v: &[String]| {
         if v.is_empty() {
@@ -259,7 +259,7 @@ fn emit_pkg(args: &Args, ctx: &Context, pkg: &Pkg, check_failed: &mut bool) -> R
 fn emit_image_pkg(
     args: &Args,
     ctx: &Context,
-    pkg: &crate::operations::imagedb::ImagePackage,
+    pkg: &crate::common::imagedb::ImagePackage,
     check_failed: &mut bool,
 ) -> Result<()> {
     if args.changelog {
@@ -294,7 +294,7 @@ fn emit_image_pkg(
 /// (avoids re-reading the image db).
 fn merged_required_names(
     ctx: &Context,
-    image_pkgs: &[crate::operations::imagedb::ImagePackage],
+    image_pkgs: &[crate::common::imagedb::ImagePackage],
 ) -> HashSet<String> {
     let mut set = HashSet::new();
     for pkg in ctx.alpm.localdb().pkgs() {
@@ -344,7 +344,7 @@ fn name_or_provides_required(
 }
 
 /// `-Ql` for an image package: list its owned files.
-fn print_image_files(args: &Args, pkg: &crate::operations::imagedb::ImagePackage) {
+fn print_image_files(args: &Args, pkg: &crate::common::imagedb::ImagePackage) {
     for file in &pkg.files {
         if args.quiet {
             println!("{file}");
@@ -362,7 +362,7 @@ fn print_image_files(args: &Args, pkg: &crate::operations::imagedb::ImagePackage
 fn print_image_check(
     args: &Args,
     ctx: &Context,
-    pkg: &crate::operations::imagedb::ImagePackage,
+    pkg: &crate::common::imagedb::ImagePackage,
     check_failed: &mut bool,
 ) -> Result<()> {
     let mut total = 0usize;

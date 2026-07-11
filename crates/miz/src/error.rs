@@ -1,4 +1,4 @@
-use crate::exit;
+use crate::common::exit;
 use std::path::PathBuf;
 
 #[derive(thiserror::Error, Debug)]

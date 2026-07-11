@@ -1,15 +1,16 @@
 use crate::config::Context;
 use crate::error::{MizError, Result};
-use crate::operations::transaction::{
+use crate::common::transaction::{
     collect_pkgs, commit, confirm, format_print_line, prepare, print_summary, should_prompt,
     TransGuard,
 };
+use crate::render::palette::Palette;
 use alpm::{Alpm, Package, SigLevel, TransFlag};
 use std::path::{Path, PathBuf};
 
 pub use crate::cli::args::upgrade::Args;
 
-pub fn run(args: Args, ctx: &mut Context) -> Result<()> {
+pub fn run(args: Args, ctx: &mut Context, palette: &Palette) -> Result<()> {
     apply_overwrites(&mut ctx.alpm, &args.overwrite)?;
     let flags = build_flags(&args);
 
@@ -27,7 +28,7 @@ pub fn run(args: Args, ctx: &mut Context) -> Result<()> {
         return Ok(());
     }
 
-    print_summary(&targets, &ctx.palette);
+    print_summary(&targets, palette);
 
     if should_prompt(args.noconfirm) && !confirm("Proceed with installation? [Y/n] ") {
         guard.release()?;
@@ -36,7 +37,7 @@ pub fn run(args: Args, ctx: &mut Context) -> Result<()> {
 
     // Register progress bars only after the summary/confirm output, so indicatif
     // anchors its cursor correctly (see the note in sync::sync_install).
-    crate::operations::progress::install(guard.alpm(), args.noprogressbar, &ctx.palette);
+    crate::render::progress_indicatif::install(guard.alpm(), args.noprogressbar, palette);
     commit(guard.alpm())?;
     guard.release()?;
     Ok(())

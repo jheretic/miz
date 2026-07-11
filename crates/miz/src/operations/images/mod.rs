@@ -14,7 +14,7 @@ mod job;
 mod relay;
 
 use crate::error::{MizError, Result};
-use crate::operations::transaction::{confirm, should_prompt};
+use crate::common::transaction::{confirm, should_prompt};
 use client::{
     map_call_error, Login1ProxyBlocking, ManagerProxyBlocking, TargetProxyBlocking, FLAG_OFFLINE,
 };
@@ -282,7 +282,7 @@ fn images_pending(args: &Args) -> Result<()> {
     // from -Iy/check-new ("is a download available"). GetVersion is the newest
     // installed; booted comes from os-release under --root.
     let installed = proxy.get_version().unwrap_or_default();
-    let booted = crate::operations::osrelease::booted_image_version();
+    let booted = crate::common::osrelease::booted_image_version();
     let installed_label = if installed.is_empty() {
         "(none)"
     } else {

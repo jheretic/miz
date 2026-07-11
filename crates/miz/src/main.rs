@@ -1,9 +1,9 @@
 mod cli;
+mod common;
 mod config;
 mod error;
-mod exit;
 mod operations;
-mod style;
+mod render;
 
 use clap::Parser;
 use cli::{Cli, Operation};
@@ -33,28 +33,33 @@ fn dispatch(cli: Cli) -> error::Result<()> {
         Operation::Files(_) => Some(".files"),
         _ => None,
     };
-    let mut ctx = if needs_context {
-        Some(config::build_with_dbext(&cli, dbext)?)
+    // build_with_dbext resolves the palette from the loaded config and returns
+    // it alongside the Context; the palette is threaded into the operations
+    // instead of living on Context.
+    let (mut ctx, palette) = if needs_context {
+        let (c, p) = config::build_with_dbext(&cli, dbext)?;
+        (Some(c), Some(p))
     } else {
-        None
+        (None, None)
     };
     let config_path = cli.config.clone();
     match cli.op {
         Operation::Database(args) => operations::database::run(args, ctx.as_ref().unwrap()),
         Operation::Query(args) => operations::query::run(args, ctx.as_ref().unwrap()),
-        Operation::Remove(args) => operations::remove::run(args, ctx.as_mut().unwrap()),
-        Operation::Sync(args) => operations::sync::run(args, ctx.as_mut().unwrap()),
+        Operation::Remove(args) => {
+            operations::remove::run(args, ctx.as_mut().unwrap(), palette.as_ref().unwrap())
+        }
+        Operation::Sync(args) => {
+            operations::sync::run(args, ctx.as_mut().unwrap(), palette.as_ref().unwrap())
+        }
         Operation::Deptest(args) => operations::deptest::run(args, ctx.as_ref().unwrap()),
-        Operation::Upgrade(args) => operations::upgrade::run(args, ctx.as_mut().unwrap()),
+        Operation::Upgrade(args) => {
+            operations::upgrade::run(args, ctx.as_mut().unwrap(), palette.as_ref().unwrap())
+        }
         Operation::Files(args) => operations::files::run(args, ctx.as_mut().unwrap()),
         Operation::Version => operations::version::run(),
         Operation::Images(args) => operations::images::run(args, config_path.as_deref()),
-        Operation::Completions { shell } => {
-            use clap::CommandFactory;
-            let mut cmd = Cli::command();
-            clap_complete::generate(shell, &mut cmd, "miz", &mut std::io::stdout());
-            Ok(())
-        }
+        Operation::Completions { shell } => operations::completions::run(shell),
     }
 }
 
@@ -64,7 +69,7 @@ fn main() -> ExitCode {
     // Install soft-interrupt handler before dispatch so any libalpm
     // transaction started during the run can be unwound cleanly on
     // SIGINT / SIGTERM / SIGHUP (prevents leaking /var/lib/pacman/db.lck).
-    if let Err(e) = operations::transaction::install_signal_handler() {
+    if let Err(e) = common::transaction::install_signal_handler() {
         // Non-fatal: warn and continue. Worst case we leak the lock on signal.
         eprintln!("warning: failed to install signal handler: {e}");
     }
@@ -79,7 +84,7 @@ fn main() -> ExitCode {
                 // TTY-ness. Config color isn't available on the failure path
                 // (the error may BE a config-load failure), so honor NO_COLOR +
                 // TTY with color defaulted on -- matching the shipped default.
-                let palette = style::Palette::resolve(true);
+                let palette = render::palette::Palette::resolve(true);
                 eprintln!("{} {e}", palette.error.apply_to("error:"));
             }
             ExitCode::from(e.exit_code() as u8)

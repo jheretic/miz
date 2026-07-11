@@ -53,8 +53,8 @@
 
 use crate::config;
 use crate::error::{MizError, Result};
-use crate::operations::osrelease;
-use crate::operations::transaction::{commit, prepare, TransGuard};
+use crate::common::osrelease;
+use crate::common::transaction::{commit, prepare, TransGuard};
 use alpm::TransFlag;
 use object::read::pe::PeFile64;
 use object::{Object, ObjectSection};

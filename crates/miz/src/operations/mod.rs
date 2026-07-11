@@ -1,13 +1,10 @@
+pub mod completions;
 pub mod database;
 pub mod deptest;
 pub mod files;
-pub mod imagedb;
 pub mod images;
-pub mod osrelease;
-pub mod progress;
 pub mod query;
 pub mod remove;
 pub mod sync;
-pub mod transaction;
 pub mod upgrade;
 pub mod version;

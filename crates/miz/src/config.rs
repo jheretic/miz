@@ -1,6 +1,6 @@
 use crate::cli::Cli;
 use crate::error::{MizError, Result};
-use crate::style::Palette;
+use crate::render::palette::Palette;
 use alpm::{Alpm, Depend, LogLevel, SigLevel, Usage};
 use miz_config::{MizConfig, Options, Repository};
 use std::fs;
@@ -12,11 +12,8 @@ pub struct Context {
     /// The read-only baked-in `/usr` image db (`[archetype].image_db`), if
     /// configured. alpm's single localdb is the mutable `/var` layered db; the
     /// image db is a separate grouped tree (not an alpm localdb), so query
-    /// operations read it via `operations::imagedb` and union the results.
+    /// operations read it via `common::imagedb` and union the results.
     pub image_db: Option<PathBuf>,
-    /// Resolved terminal color styling for this run (from `[options] color` +
-    /// NO_COLOR + TTY detection). Read by the print sites.
-    pub palette: Palette,
 }
 
 /// User override layer. Optional: absent means "vendor config as-is".
@@ -44,8 +41,11 @@ const USER_CONFIG_REL: &str = "etc/miz.toml";
 /// returns an empty filelist forever.
 ///
 /// `-F` operations pass `Some(".files")`; everything else passes `None`.
-pub fn build_with_dbext(cli: &Cli, dbext: Option<&str>) -> Result<Context> {
+pub fn build_with_dbext(cli: &Cli, dbext: Option<&str>) -> Result<(Context, Palette)> {
     let conf = load_config(cli.config.as_deref())?;
+    // Resolve the palette here (where the loaded config is in hand) and hand it
+    // back to main.rs, rather than storing it on the libalpm-linked Context.
+    let palette = Palette::resolve(conf.options.color);
 
     let root = cli
         .root
@@ -74,7 +74,8 @@ pub fn build_with_dbext(cli: &Cli, dbext: Option<&str>) -> Result<Context> {
     // persistent root. root stays "/", so the overlay routing is transparent to
     // alpm. `-S` on an image without the mutable overlay active will fail to
     // write /usr files — that is the accepted immutable contract.
-    assemble_context(&conf, root, dbpath, dbext, image_db.as_deref())
+    let ctx = assemble_context(&conf, root, dbpath, dbext, image_db.as_deref())?;
+    Ok((ctx, palette))
 }
 
 /// Build a Context rooted at an arbitrary tree (the `-I --reinstall-layered`
@@ -106,7 +107,7 @@ pub fn build_with_dbext(cli: &Cli, dbext: Option<&str>) -> Result<Context> {
 /// `/usr`) are used — no string surgery on the user file. `root`/`dbpath` point
 /// into the `/run` snapshot; `image_db` is the NEW image's read-only db;
 /// `archive_date`, when set, repins core/extra/multilib to the archive snapshot
-/// via [`crate::operations::osrelease::archive_url`] (the date derives from the
+/// via [`crate::common::osrelease::archive_url`] (the date derives from the
 /// new `/usr`'s os-release).
 ///
 /// SAFETY: this does NOT itself assert the `/run` containment invariant — the
@@ -212,7 +213,7 @@ fn repin_archive_repos(conf: &mut MizConfig, date: &str) {
         .archetype
         .as_ref()
         .and_then(|a| a.archive_base.as_deref());
-    let url = crate::operations::osrelease::archive_url(base, date);
+    let url = crate::common::osrelease::archive_url(base, date);
     for repo in &mut conf.repos {
         if matches!(repo.name.as_str(), "core" | "extra" | "multilib") {
             repo.servers = vec![url.clone()];
@@ -271,7 +272,6 @@ fn assemble_context(
         alpm,
         root,
         image_db: image_db.map(Path::to_path_buf),
-        palette: Palette::resolve(conf.options.color),
     })
 }
 
@@ -305,9 +305,9 @@ fn resolve_dbpath(
 ///
 /// Each provision is already `name=version` (an EQ-mod entry, the only kind
 /// libalpm consults for a versioned dep) or a bare/versioned provides token,
-/// per operations::imagedb::provisions.
+/// per common::imagedb::provisions.
 fn seed_assume_installed(alpm: &mut Alpm, image_db: &Path) {
-    let provisions = match crate::operations::imagedb::provisions(image_db) {
+    let provisions = match crate::common::imagedb::provisions(image_db) {
         Ok(p) => p,
         Err(e) => {
             eprintln!(
