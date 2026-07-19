@@ -10,7 +10,7 @@ use alpm::{Alpm, Db, Package, Pkg, TransFlag};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-pub use crate::cli::args::sync::Args;
+use crate::params::sync::Params as Args;
 
 pub fn run(
     args: Args,

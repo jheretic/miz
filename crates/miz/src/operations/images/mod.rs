@@ -23,7 +23,7 @@ use client::{
 };
 use describe::Describe;
 
-pub use crate::cli::args::images::Args;
+use crate::params::images::Params as Args;
 
 /// A `Manager.ListTargets` row: (class, name, object path).
 type TargetEntry = (String, String, zbus::zvariant::OwnedObjectPath);

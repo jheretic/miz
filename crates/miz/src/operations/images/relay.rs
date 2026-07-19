@@ -63,7 +63,7 @@ use object::{Object, ObjectSection};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub use crate::cli::args::images::Args;
+use crate::params::images::Params as Args;
 
 /// Working mount for the btrfs top-level (subvolid 5), where the per-version
 /// root subvolumes live side by side.

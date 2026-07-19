@@ -3,7 +3,7 @@ use crate::config::Context;
 use crate::error::{MizError, Result};
 use alpm::{Package, PackageReason};
 
-pub use crate::cli::args::database::Args;
+use crate::params::database::Params as Args;
 
 pub fn run(args: Args, ctx: &Context) -> Result<DbReport> {
     if args.check > 0 {

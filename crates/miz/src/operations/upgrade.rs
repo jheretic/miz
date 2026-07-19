@@ -6,7 +6,7 @@ use crate::error::{MizError, Result};
 use alpm::{Alpm, Package, SigLevel, TransFlag};
 use std::path::{Path, PathBuf};
 
-pub use crate::cli::args::upgrade::Args;
+use crate::params::upgrade::Params as Args;
 
 pub fn run(
     args: Args,

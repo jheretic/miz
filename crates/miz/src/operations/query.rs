@@ -15,7 +15,7 @@ use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
-pub use crate::cli::args::query::Args;
+use crate::params::query::Params as Args;
 
 /// Accumulators for one query invocation. Exactly one is populated per run
 /// (the detail mode is fixed by args), mirroring the old emit_pkg dispatch.

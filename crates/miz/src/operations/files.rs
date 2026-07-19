@@ -3,7 +3,7 @@ use crate::config::Context;
 use crate::error::{MizError, Result};
 use alpm::{Db, Pkg};
 
-pub use crate::cli::args::files::Args;
+use crate::params::files::Params as Args;
 
 pub fn run(args: Args, ctx: &mut Context) -> Result<FilesReport> {
     if args.list && args.regex {

@@ -2,7 +2,7 @@ use crate::common::report::DeptestReport;
 use crate::config::Context;
 use crate::error::Result;
 
-pub use crate::cli::args::deptest::Args;
+use crate::params::deptest::Params as Args;
 
 pub fn run(args: Args, ctx: &Context) -> Result<DeptestReport> {
     let mut missing = Vec::new();

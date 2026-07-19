@@ -7,7 +7,7 @@ use crate::config::Context;
 use crate::error::{MizError, Result};
 use alpm::{Alpm, Depend, Package, TransFlag};
 
-pub use crate::cli::args::remove::Args;
+use crate::params::remove::Params as Args;
 
 pub fn run(
     args: Args,
