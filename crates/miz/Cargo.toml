@@ -12,24 +12,12 @@ clap_complete = "4"
 clap_mangen   = "0.2"
 
 [dependencies]
-alpm               = "5"
-alpm-sys           = "5"
-libc               = "0.2"
-miz-config         = { path = "../miz-config" }
-ctrlc              = { version = "3", features = ["termination"] }
+miz-core           = { path = "../miz-core" }
 clap               = { version = "4", features = ["derive", "wrap_help"] }
 clap_complete      = "4"
-thiserror          = { workspace = true }
-tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-regex              = "1"
-object             = { version = "0.36", default-features = false, features = ["read_core", "pe", "std"] }
 indicatif          = "0.17"
 console            = "0.15"
-serde              = { workspace = true }
-serde_json         = { workspace = true }
-toml               = { workspace = true }
-zbus               = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = "2"

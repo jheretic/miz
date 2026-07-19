@@ -3,8 +3,8 @@
 //! they interleave with the download bars); this covers the deferred stdout
 //! body plus the colorized error/warning diagnostics.
 
-use crate::common::report::SyncReport;
 use crate::render::palette::Palette;
+use miz_core::common::report::SyncReport;
 
 pub fn render(report: &SyncReport, palette: &Palette) {
     match report {
@@ -14,9 +14,7 @@ pub fn render(report: &SyncReport, palette: &Palette) {
             }
         }
         SyncReport::Listing {
-            lines,
-            diagnostics,
-            ..
+            lines, diagnostics, ..
         } => {
             for line in lines {
                 println!("{line}");

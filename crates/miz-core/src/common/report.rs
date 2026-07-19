@@ -32,7 +32,11 @@ pub enum TransactionKind {
 
 impl TransactionPlan {
     /// A plan with a package summary (install/remove/upgrade).
-    pub fn with_targets(targets: Vec<(String, String)>, kind: TransactionKind, prompt: &str) -> Self {
+    pub fn with_targets(
+        targets: Vec<(String, String)>,
+        kind: TransactionKind,
+        prompt: &str,
+    ) -> Self {
         TransactionPlan {
             targets,
             kind,
@@ -244,12 +248,21 @@ pub struct SearchHit {
 }
 
 pub enum QueryBody {
-    List { quiet: bool, pkgs: Vec<PkgLine> },
+    List {
+        quiet: bool,
+        pkgs: Vec<PkgLine>,
+    },
     Info(Vec<InfoBlock>),
-    Files { quiet: bool, lines: Vec<FileLine> },
+    Files {
+        quiet: bool,
+        lines: Vec<FileLine>,
+    },
     Check(Vec<CheckResult>),
     Changelog(Vec<String>),
-    Search { quiet: bool, hits: Vec<SearchHit> },
+    Search {
+        quiet: bool,
+        hits: Vec<SearchHit>,
+    },
     /// `-Qo`: "path is owned by name version" lines.
     Owns(Vec<String>),
     /// `-Qg`: pre-built "group pkg" / "group" lines.
@@ -488,10 +501,7 @@ impl ImagesReport {
         // A relay failure after a completed install is carried here so render
         // prints the "updated to" line first; propagate it now with the same
         // generic exit as the pre-refactor `?`.
-        if let ImagesReport::Upgrade(ImageUpgradeOutcome::Done {
-            error: Some(e), ..
-        }) = self
-        {
+        if let ImagesReport::Upgrade(ImageUpgradeOutcome::Done { error: Some(e), .. }) = self {
             return Err(MizError::Sysupdate(e.clone()));
         }
         Ok(())

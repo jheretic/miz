@@ -1,8 +1,6 @@
 use crate::common::progress::SharedSink;
 use crate::common::report::{Confirmer, RemoveReport, TransactionKind, TransactionPlan};
-use crate::common::transaction::{
-    collect_pkgs, commit, format_print_line, prepare, TransGuard,
-};
+use crate::common::transaction::{collect_pkgs, commit, format_print_line, prepare, TransGuard};
 use crate::config::Context;
 use crate::error::{MizError, Result};
 use alpm::{Alpm, Depend, Package, TransFlag};

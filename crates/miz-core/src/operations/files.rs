@@ -96,7 +96,12 @@ fn collect_pkg_files(db: &Db, pkg: &Pkg) -> FilePkg {
         db: db.name().to_string(),
         pkg: pkg.name().to_string(),
         version: pkg.version().to_string(),
-        files: pkg.files().files().iter().map(|f| f.name().to_vec()).collect(),
+        files: pkg
+            .files()
+            .files()
+            .iter()
+            .map(|f| f.name().to_vec())
+            .collect(),
         exact_file: false,
     }
 }

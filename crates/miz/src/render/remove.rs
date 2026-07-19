@@ -1,7 +1,7 @@
 //! Renders a [`RemoveReport`]. Only `--print` defers output today; the
 //! `trans_release` warning was uncolored in the inline code, so no palette.
 
-use crate::common::report::RemoveReport;
+use miz_core::common::report::RemoveReport;
 
 pub fn render(report: &RemoveReport) {
     match report {

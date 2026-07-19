@@ -1,0 +1,14 @@
+%NAME%
+baz
+
+%VERSION%
+2.0-3
+
+%DESC%
+A baz library
+
+%PROVIDES%
+libbaz.so=2-64
+
+%REASON%
+1

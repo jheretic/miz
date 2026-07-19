@@ -1,4 +1,4 @@
-use crate::common::report::VersionReport;
+use miz_core::common::report::VersionReport;
 
 pub fn render(r: &VersionReport) {
     let (miz_ver, alpm_ver) = (&r.miz, &r.alpm);

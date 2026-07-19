@@ -4,7 +4,7 @@
 //! so `build.rs` can import the full `Cli` Command tree for `clap_mangen`
 //! without dragging in `alpm-sys` (which needs `libalpm` at link time).
 //!
-//! The `run()` implementations stay in `crate::operations::*`.
+//! The `run()` implementations live in `miz_core::operations::*`.
 
 use std::path::PathBuf;
 

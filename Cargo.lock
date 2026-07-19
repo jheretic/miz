@@ -723,28 +723,16 @@ dependencies = [
 name = "miz"
 version = "0.1.0"
 dependencies = [
- "alpm",
- "alpm-sys",
  "assert_cmd",
  "clap",
  "clap_complete",
  "clap_mangen",
  "console",
- "ctrlc",
  "indicatif",
- "libc",
- "miz-config",
- "object",
+ "miz-core",
  "predicates",
- "regex",
- "serde",
- "serde_json",
  "tempfile",
- "thiserror",
- "toml",
- "tracing",
  "tracing-subscriber",
- "zbus",
 ]
 
 [[package]]
@@ -764,6 +752,25 @@ dependencies = [
  "pacmanconf",
  "tempfile",
  "toml",
+]
+
+[[package]]
+name = "miz-core"
+version = "0.1.0"
+dependencies = [
+ "alpm",
+ "alpm-sys",
+ "ctrlc",
+ "libc",
+ "miz-config",
+ "object",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "toml",
+ "tracing",
+ "zbus",
 ]
 
 [[package]]

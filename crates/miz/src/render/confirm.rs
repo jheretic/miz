@@ -3,8 +3,8 @@
 //! `[Y/n]` prompt. Honors `noconfirm` (auto-yes) and non-TTY stdin exactly as
 //! the old `should_prompt` + `confirm` did.
 
-use crate::common::report::{Confirmer, TransactionPlan};
 use crate::render::palette::Palette;
+use miz_core::common::report::{Confirmer, TransactionPlan};
 use std::io::{IsTerminal, Write};
 
 pub struct TtyConfirmer {

@@ -1,13 +1,9 @@
 mod cli;
-mod common;
-mod config;
-mod error;
-mod operations;
-mod params;
 mod render;
 
 use clap::Parser;
 use cli::{Cli, Operation};
+use miz_core::{common, config, error, operations, params};
 use std::process::ExitCode;
 use tracing_subscriber::EnvFilter;
 
@@ -205,13 +201,13 @@ fn dispatch(cli: Cli) -> error::Result<()> {
     // verbs. The sink is shared (Rc<RefCell>) because libalpm's callback
     // registration stores 'static closures; core clones the handle into each.
     let make_seams = |noconfirm: bool, noprogressbar: bool| {
-        let pal = palette.clone().unwrap_or_else(|| render::palette::Palette::resolve(true));
+        let pal = palette
+            .clone()
+            .unwrap_or_else(|| render::palette::Palette::resolve(true));
         let confirmer = render::confirm::TtyConfirmer::new(pal.clone(), noconfirm);
-        let sink: common::progress::SharedSink =
-            std::rc::Rc::new(std::cell::RefCell::new(render::progress_indicatif::IndicatifSink::new(
-                !noprogressbar,
-                &pal,
-            )));
+        let sink: common::progress::SharedSink = std::rc::Rc::new(std::cell::RefCell::new(
+            render::progress_indicatif::IndicatifSink::new(!noprogressbar, &pal),
+        ));
         (confirmer, sink)
     };
     match cli.op {

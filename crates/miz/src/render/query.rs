@@ -2,9 +2,7 @@
 //! query printing produced. Uncolored (query has never colorized), so no
 //! palette is threaded.
 
-use crate::common::report::{
-    InfoField, QueryBody, QueryReport, SearchSource,
-};
+use miz_core::common::report::{InfoField, QueryBody, QueryReport, SearchSource};
 
 pub fn render(report: &QueryReport) {
     match &report.body {

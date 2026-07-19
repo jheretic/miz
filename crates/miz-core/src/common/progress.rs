@@ -139,16 +139,13 @@ pub fn register(alpm: &Alpm, sink: SharedSink) {
     });
 
     let s = sink.clone();
-    alpm.set_progress_cb(
-        (),
-        move |kind, pkg, percent, _n, _current, _: &mut ()| {
-            s.borrow_mut().handle(ProgressEvent::Op {
-                kind: OpKind::from_alpm(kind),
-                pkg: pkg.to_string(),
-                percent: percent.clamp(0, 100) as u64,
-            });
-        },
-    );
+    alpm.set_progress_cb((), move |kind, pkg, percent, _n, _current, _: &mut ()| {
+        s.borrow_mut().handle(ProgressEvent::Op {
+            kind: OpKind::from_alpm(kind),
+            pkg: pkg.to_string(),
+            percent: percent.clamp(0, 100) as u64,
+        });
+    });
 
     alpm.set_dl_cb((), move |filename, event, _: &mut ()| {
         let ev = match event.event() {
@@ -185,12 +182,27 @@ mod tests {
     fn opkind_maps_every_alpm_progress_variant() {
         assert_eq!(OpKind::from_alpm(Progress::AddStart), OpKind::Install);
         assert_eq!(OpKind::from_alpm(Progress::UpgradeStart), OpKind::Upgrade);
-        assert_eq!(OpKind::from_alpm(Progress::DowngradeStart), OpKind::Downgrade);
-        assert_eq!(OpKind::from_alpm(Progress::ReinstallStart), OpKind::Reinstall);
+        assert_eq!(
+            OpKind::from_alpm(Progress::DowngradeStart),
+            OpKind::Downgrade
+        );
+        assert_eq!(
+            OpKind::from_alpm(Progress::ReinstallStart),
+            OpKind::Reinstall
+        );
         assert_eq!(OpKind::from_alpm(Progress::RemoveStart), OpKind::Remove);
-        assert_eq!(OpKind::from_alpm(Progress::ConflictsStart), OpKind::Conflicts);
-        assert_eq!(OpKind::from_alpm(Progress::DiskspaceStart), OpKind::Diskspace);
-        assert_eq!(OpKind::from_alpm(Progress::IntegrityStart), OpKind::Integrity);
+        assert_eq!(
+            OpKind::from_alpm(Progress::ConflictsStart),
+            OpKind::Conflicts
+        );
+        assert_eq!(
+            OpKind::from_alpm(Progress::DiskspaceStart),
+            OpKind::Diskspace
+        );
+        assert_eq!(
+            OpKind::from_alpm(Progress::IntegrityStart),
+            OpKind::Integrity
+        );
         assert_eq!(OpKind::from_alpm(Progress::LoadStart), OpKind::Load);
         assert_eq!(OpKind::from_alpm(Progress::KeyringStart), OpKind::Keyring);
     }

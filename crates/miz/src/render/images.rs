@@ -4,7 +4,7 @@
 //! name` component line are formatted here (presentation), while the label
 //! fields for `-Ii`/`-If` arrive pre-built as `InfoField`s from core.
 
-use crate::common::report::{
+use miz_core::common::report::{
     ImageListRow, ImageUpgradeOutcome, ImagesReport, InfoField, RelayReport,
 };
 

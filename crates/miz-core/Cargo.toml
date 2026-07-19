@@ -1,0 +1,21 @@
+[package]
+name        = "miz-core"
+version     = "0.1.0"
+edition     = "2021"
+description = "libalpm-linked core logic and presentation-neutral abstractions for miz"
+license     = "GPL-2.0-or-later"
+
+[dependencies]
+alpm        = "5"
+alpm-sys    = "5"
+libc        = "0.2"
+miz-config  = { path = "../miz-config" }
+ctrlc       = { version = "3", features = ["termination"] }
+thiserror   = { workspace = true }
+tracing     = "0.1"
+regex       = "1"
+object      = { version = "0.36", default-features = false, features = ["read_core", "pe", "std"] }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+toml        = { workspace = true }
+zbus        = { workspace = true }

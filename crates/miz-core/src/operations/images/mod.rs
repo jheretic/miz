@@ -250,7 +250,9 @@ fn images_info(args: &Args) -> Result<ImagesReport> {
     let d = Describe::parse(&json)
         .map_err(|e| MizError::Sysupdate(format!("could not parse Describe JSON: {e}")))?;
     let verbose = args.info >= 2 && !args.quiet;
-    Ok(ImagesReport::Info(format::describe_fields(&name, &d, verbose)))
+    Ok(ImagesReport::Info(format::describe_fields(
+        &name, &d, verbose,
+    )))
 }
 
 fn images_check_new(args: &Args) -> Result<ImagesReport> {
@@ -259,7 +261,11 @@ fn images_check_new(args: &Args) -> Result<ImagesReport> {
     let (name, proxy) = resolve_target(&conn, &targets, component)?;
 
     let newest = proxy.check_new()?;
-    let newest = if newest.is_empty() { None } else { Some(newest) };
+    let newest = if newest.is_empty() {
+        None
+    } else {
+        Some(newest)
+    };
     Ok(ImagesReport::CheckNew {
         name,
         quiet: args.quiet,
@@ -410,10 +416,12 @@ fn images_upgrade(
         None => resolve_upgrade_plan(&proxy)?,
     };
     if matches!(plan, UpgradePlan::UpToDate) {
-        return Ok(ImagesReport::Upgrade(ImageUpgradeOutcome::AlreadyUpToDate {
-            name,
-            quiet: args.quiet,
-        }));
+        return Ok(ImagesReport::Upgrade(
+            ImageUpgradeOutcome::AlreadyUpToDate {
+                name,
+                quiet: args.quiet,
+            },
+        ));
     }
     let (acquire_arg, host_changed) = acquire_args(&plan);
 

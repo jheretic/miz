@@ -1,7 +1,7 @@
 //! Renders an [`UpgradeReport`]. See `render::remove`: only `--print` defers
 //! output and its warning was uncolored inline.
 
-use crate::common::report::UpgradeReport;
+use miz_core::common::report::UpgradeReport;
 
 pub fn render(report: &UpgradeReport) {
     match report {

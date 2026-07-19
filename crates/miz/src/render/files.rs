@@ -1,7 +1,7 @@
 //! Renders a [`FilesReport`] byte-for-byte like the inline files printing.
 //! Uncolored today, so no palette threaded.
 
-use crate::common::report::{FilePkg, FilesReport};
+use miz_core::common::report::{FilePkg, FilesReport};
 use std::io::Write;
 
 pub fn render(report: &FilesReport) {

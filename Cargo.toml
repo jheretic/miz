@@ -4,6 +4,7 @@ members = [
     "crates/miz",
     "crates/miz-config",
     "crates/miz-convert",
+    "crates/miz-core",
 ]
 
 # Workspace-wide deps that more than one crate will use. Crates opt in

@@ -5,4 +5,4 @@
 // Re-exported for the render verbs split out in later phases; no render call
 // site formats yet, so allow the currently-unused glob.
 #[allow(unused_imports)]
-pub use crate::common::fmt::*;
+pub use miz_core::common::fmt::*;

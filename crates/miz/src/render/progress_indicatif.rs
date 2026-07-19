@@ -3,9 +3,9 @@
 //! has always drawn: the dup-bar fix (retain last_kind/last_pkg past 100%), the
 //! colorized `::` status lines via `Palette`, and the op/dl/job bar styles.
 
-use crate::common::progress::{OpKind, ProgressEvent, ProgressSink};
 use crate::render::palette::Palette;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use miz_core::common::progress::{OpKind, ProgressEvent, ProgressSink};
 use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::time::Duration;

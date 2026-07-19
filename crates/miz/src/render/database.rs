@@ -1,4 +1,4 @@
-use crate::common::report::DbReport;
+use miz_core::common::report::DbReport;
 
 pub fn render(r: &DbReport) {
     match r {

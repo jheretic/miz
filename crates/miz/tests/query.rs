@@ -287,7 +287,9 @@ fn dash_qk_checks_image_package_files() {
         ])
         .assert()
         .failure()
-        .stdout(predicate::str::contains("foo: 3 total files, 3 missing files"));
+        .stdout(predicate::str::contains(
+            "foo: 3 total files, 3 missing files",
+        ));
 }
 
 #[test]

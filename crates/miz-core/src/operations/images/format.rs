@@ -23,7 +23,11 @@ pub fn describe_fields(component: &str, d: &Describe, verbose: bool) -> Vec<Info
     let mut fields = Vec::new();
 
     label(&mut fields, "Component", component);
-    label(&mut fields, "Version", d.version.as_deref().unwrap_or("None"));
+    label(
+        &mut fields,
+        "Version",
+        d.version.as_deref().unwrap_or("None"),
+    );
     label(&mut fields, "Newest", yesno(d.newest));
     label(&mut fields, "Available", yesno(d.available));
     label(&mut fields, "Installed", yesno(d.installed));

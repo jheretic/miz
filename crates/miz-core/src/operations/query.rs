@@ -1,3 +1,7 @@
+use crate::common::fmt::{
+    format_date, format_size, format_validation, join_dep_list, join_list_str, join_optdeps,
+    join_string_list,
+};
 use crate::common::imagedb::ImagePackage;
 use crate::common::report::{
     CheckResult, FileLine, InfoBlock, InfoField, PkgLine, QueryBody, QueryError, QueryReport,
@@ -5,10 +9,6 @@ use crate::common::report::{
 };
 use crate::config::Context;
 use crate::error::Result;
-use crate::common::fmt::{
-    format_date, format_size, format_validation, join_dep_list, join_list_str, join_optdeps,
-    join_string_list,
-};
 use alpm::{PackageReason, Pkg, SigLevel};
 use std::collections::HashSet;
 use std::io::Read;
@@ -94,7 +94,10 @@ fn image_info_block(args: &Args, pkg: &ImagePackage) -> InfoBlock {
     if pkg.optdepends.is_empty() {
         label!("Optional Deps", "None");
     } else {
-        label!("Optional Deps", &pkg.optdepends.join("\n                     "));
+        label!(
+            "Optional Deps",
+            &pkg.optdepends.join("\n                     ")
+        );
     }
     label!("Conflicts With", &none(&pkg.conflicts));
     label!("Replaces", &none(&pkg.replaces));
@@ -173,8 +176,7 @@ fn query_local(args: &Args, ctx: &Context) -> Result<QueryReport> {
                 continue;
             }
             if args.unrequired {
-                let provides: Vec<String> =
-                    pkg.provides().iter().map(|p| p.to_string()).collect();
+                let provides: Vec<String> = pkg.provides().iter().map(|p| p.to_string()).collect();
                 if name_or_provides_required(pkg.name(), &provides, &required_names) {
                     continue;
                 }
@@ -346,7 +348,8 @@ fn emit_image_pkg(
         return Err(QueryError::Other(format!("no changelog for {}", pkg.name)));
     }
     if args.check > 0 {
-        body.check.push(build_image_check(args, ctx, pkg, check_failed));
+        body.check
+            .push(build_image_check(args, ctx, pkg, check_failed));
         return Ok(());
     }
     if args.list {
@@ -471,8 +474,14 @@ fn push_changelog(
             Ok(())
         }
         Err(_) => {
-            diagnostics.push(format!("error: no changelog available for '{}'", pkg.name()));
-            Err(QueryError::Other(format!("no changelog for {}", pkg.name())))
+            diagnostics.push(format!(
+                "error: no changelog available for '{}'",
+                pkg.name()
+            ));
+            Err(QueryError::Other(format!(
+                "no changelog for {}",
+                pkg.name()
+            )))
         }
     }
 }

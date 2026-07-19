@@ -1,11 +1,11 @@
+use crate::common::fmt::{
+    format_date, format_size, format_validation, join_dep_list, join_list_str, join_optdeps,
+};
 use crate::common::progress::SharedSink;
 use crate::common::report::{Confirmer, SyncReport, TransactionKind, TransactionPlan};
 use crate::common::transaction::{collect_pkgs, commit, prepare, TransGuard};
 use crate::config::Context;
 use crate::error::{MizError, Result};
-use crate::common::fmt::{
-    format_date, format_size, format_validation, join_dep_list, join_list_str, join_optdeps,
-};
 use alpm::{Alpm, Db, Package, Pkg, TransFlag};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -491,9 +491,15 @@ fn sync_install(
     }
 
     let (kind, prompt) = if args.downloadonly {
-        (TransactionKind::DownloadOnly, "Proceed with download? [Y/n] ")
+        (
+            TransactionKind::DownloadOnly,
+            "Proceed with download? [Y/n] ",
+        )
     } else {
-        (TransactionKind::Install, "Proceed with installation? [Y/n] ")
+        (
+            TransactionKind::Install,
+            "Proceed with installation? [Y/n] ",
+        )
     };
     let plan = TransactionPlan::with_targets(targets, kind, prompt);
     if !confirmer.confirm(&plan) {
@@ -515,11 +521,7 @@ fn sync_install(
     Ok(SyncReport::Done)
 }
 
-fn sync_clean(
-    args: &Args,
-    ctx: &mut Context,
-    confirmer: &mut dyn Confirmer,
-) -> Result<SyncReport> {
+fn sync_clean(args: &Args, ctx: &mut Context, confirmer: &mut dyn Confirmer) -> Result<SyncReport> {
     let installed: HashSet<(String, String)> = ctx
         .alpm
         .localdb()
