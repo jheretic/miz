@@ -2,16 +2,14 @@
 //! channel; the async side receives events and emits `Job.Progress` signals.
 //!
 //! `SharedSink` is `Rc<RefCell<dyn ProgressSink>>` (`!Send`), so the sink is
-//! created and dropped on the worker thread (a later phase). It only holds an
-//! `mpsc::Sender<ProgressEvent>`, which IS `Send` — the `!Send` sink itself
-//! never crosses a thread boundary.
+//! created and dropped on the worker thread. It only holds an
+//! `async_channel::Sender<ProgressEvent>`, which IS `Send` — the `!Send` sink
+//! itself never crosses a thread boundary. The async side holds the matching
+//! `Receiver` and can `.await` events (without blocking the executor) as the
+//! worker drives the transaction.
 
-// Wired into the worker + async receiver in Phase 3; Phase 2 defines the shape
-// and unit-tests the pure mapping.
-#![allow(dead_code)]
-
+use async_channel::Sender;
 use miz_core::common::progress::{ProgressEvent, ProgressSink};
-use std::sync::mpsc::Sender;
 
 /// A `ProgressSink` that pushes each event onto a channel for the async task.
 pub struct ChannelSink {
@@ -27,7 +25,7 @@ impl ChannelSink {
 impl ProgressSink for ChannelSink {
     fn handle(&mut self, ev: ProgressEvent) {
         // A closed receiver means the job is gone; dropping the event is fine.
-        let _ = self.tx.send(ev);
+        let _ = self.tx.try_send(ev);
     }
 }
 
@@ -67,7 +65,6 @@ pub fn progress_signal(ev: &ProgressEvent) -> Option<(u32, String)> {
 mod tests {
     use super::*;
     use miz_core::common::progress::OpKind;
-    use std::sync::mpsc;
 
     #[test]
     fn status_maps_to_zero_percent_with_text() {
@@ -147,13 +144,16 @@ mod tests {
     /// same thread (SharedSink is !Send).
     #[test]
     fn channel_sink_forwards_events() {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = async_channel::unbounded();
         let mut sink = ChannelSink::new(tx);
         sink.handle(ProgressEvent::Job { percent: 10 });
         sink.handle(ProgressEvent::Status("done".into()));
         drop(sink);
 
-        let events: Vec<_> = rx.iter().collect();
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.recv_blocking() {
+            events.push(ev);
+        }
         assert_eq!(events.len(), 2);
         assert!(matches!(events[0], ProgressEvent::Job { percent: 10 }));
         assert!(matches!(events[1], ProgressEvent::Status(_)));

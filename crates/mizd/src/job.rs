@@ -1,9 +1,11 @@
 //! The `org.archetype.miz1.Job` interface + the job registry.
 //!
-//! Phase 2: no real job runs. The registry allocates monotonic ids and tracks
-//! active (id -> path); the interface methods are stubs.
+//! The registry allocates monotonic ids and tracks active (id -> path). A `Job`
+//! carries a shared `Arc<AtomicU32>` progress cell its driver task updates.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use zbus::interface;
 use zbus::zvariant::OwnedObjectPath;
 
@@ -43,9 +45,8 @@ impl JobRegistry {
         Some((id, path))
     }
 
-    /// Remove a finished job from the active set. Called by the worker on job
-    /// termination in a later phase.
-    #[allow(dead_code)]
+    /// Remove a finished job from the active set. Called on job termination
+    /// (the refresh-job task) before emitting `JobRemoved`.
     pub fn remove(&mut self, id: u32) -> Option<OwnedObjectPath> {
         self.active.remove(&id)
     }
@@ -62,23 +63,28 @@ pub fn job_path(id: u32) -> OwnedObjectPath {
         .expect("job id yields a valid object path")
 }
 
-/// A served Job object. Phase 2: static fields, `Cancel` is a no-op stub.
-/// Constructed by the worker in a later phase; only tests build it now.
-#[allow(dead_code)]
+/// A served Job object. `progress` is shared with the job's driver task (the
+/// refresh loop) via an `Arc<AtomicU32>` so the served `Progress` property
+/// reflects live progress; `Cancel` is a Phase-4 no-op stub.
 pub struct Job {
     id: u32,
     kind: String,
-    progress: u32,
+    progress: Arc<AtomicU32>,
 }
 
-#[allow(dead_code)]
 impl Job {
     pub fn new(id: u32, kind: impl Into<String>) -> Self {
         Job {
             id,
             kind: kind.into(),
-            progress: 0,
+            progress: Arc::new(AtomicU32::new(0)),
         }
+    }
+
+    /// A handle to this job's progress cell, for the driver task to update as
+    /// the operation advances (so the served `Progress` property tracks it).
+    pub fn progress_handle(&self) -> Arc<AtomicU32> {
+        self.progress.clone()
     }
 }
 
@@ -96,7 +102,7 @@ impl Job {
 
     #[zbus(property)]
     fn progress(&self) -> u32 {
-        self.progress
+        self.progress.load(Ordering::SeqCst)
     }
 
     /// Cancel the job. Phase 4 wires this to `alpm_trans_interrupt` via the

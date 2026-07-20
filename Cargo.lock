@@ -777,6 +777,7 @@ dependencies = [
 name = "mizd"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
  "miz-core",
  "tracing",
  "tracing-subscriber",

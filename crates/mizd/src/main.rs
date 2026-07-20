@@ -1,18 +1,19 @@
 //! mizd — a D-Bus daemon exposing miz layered-package operations over
 //! `org.archetype.miz1`.
 //!
-//! Phase 2: serve the Manager object and request the well-known name. No worker
-//! thread, no libalpm. Uses zbus's internal async executor (via the `async-io`
-//! feature); no tokio.
+//! Serve the Manager object, request the well-known name, and spawn the single
+//! libalpm worker thread (owned by the Manager). Uses zbus's internal async
+//! executor (via the `async-io` feature); no tokio.
 
 mod job;
 mod manager;
 mod sink;
+mod worker;
 
 use manager::Manager;
 
-const NAME: &str = "org.archetype.miz1";
-const MANAGER_PATH: &str = "/org/archetype/miz1";
+pub(crate) const NAME: &str = "org.archetype.miz1";
+pub(crate) const MANAGER_PATH: &str = "/org/archetype/miz1";
 
 fn main() -> zbus::Result<()> {
     tracing_subscriber::fmt()

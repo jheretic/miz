@@ -8,5 +8,6 @@ license     = "GPL-2.0-or-later"
 [dependencies]
 miz-core           = { path = "../miz-core" }
 zbus               = { workspace = true }
+async-channel      = "2"
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
