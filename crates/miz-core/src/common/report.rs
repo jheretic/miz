@@ -60,6 +60,18 @@ pub trait Confirmer {
     fn confirm(&mut self, plan: &TransactionPlan) -> bool;
 }
 
+/// Non-interactive confirmer that approves every plan. The intended confirmer
+/// for the `mizd` daemon (per CORE-SEAM.md): the daemon has no TTY, and the
+/// inspect-before-apply step lives on the client (PreviewInstall returns the
+/// plan, the client confirms, then Install commits with `AssumeYes`).
+pub struct AssumeYes;
+
+impl Confirmer for AssumeYes {
+    fn confirm(&mut self, _plan: &TransactionPlan) -> bool {
+        true
+    }
+}
+
 // ---------------------------------------------------------------------------
 // version
 // ---------------------------------------------------------------------------
@@ -589,6 +601,20 @@ mod tests {
     fn remove_upgrade_reports_never_error() {
         assert!(RemoveReport::Done.outcome().is_ok());
         assert!(UpgradeReport::Done.outcome().is_ok());
+    }
+
+    #[test]
+    fn assume_yes_confirms_any_plan() {
+        let mut c = AssumeYes;
+        assert!(c.confirm(&TransactionPlan::with_targets(
+            vec![("bash".into(), "5.2-1".into())],
+            TransactionKind::Install,
+            "Proceed with installation? [Y/n] ",
+        )));
+        assert!(c.confirm(&TransactionPlan::prompt_only(
+            TransactionKind::Remove,
+            "Do you want to remove these packages? [Y/n] ",
+        )));
     }
 
     #[test]

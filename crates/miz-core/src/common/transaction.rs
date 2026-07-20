@@ -87,20 +87,16 @@ impl Drop for TransGuard<'_> {
 /// signal).
 pub fn install_signal_handler() -> std::result::Result<(), ctrlc::Error> {
     ctrlc::set_handler(|| {
+        if interrupt_active_transaction() {
+            // Interrupt accepted: let the main thread observe the error
+            // from its in-progress alpm call and unwind through normal
+            // Drop. Do NOT exit here.
+            return;
+        }
+        // No active transaction, or libalpm refused the interrupt: tear the
+        // lock down ourselves so we don't leak db.lck.
         let p = ALPM_HANDLE.load(Ordering::SeqCst);
         if !p.is_null() {
-            // SAFETY: `p` is a valid alpm handle owned by the main thread for
-            // the lifetime of the current TransGuard. `alpm_trans_interrupt`
-            // is designed for cross-thread/signal use.
-            let r = unsafe { alpm_sys::alpm_trans_interrupt(p) };
-            if r == 0 {
-                // Interrupt accepted: let the main thread observe the error
-                // from its in-progress alpm call and unwind through normal
-                // Drop. Do NOT exit here.
-                return;
-            }
-            // Interrupt failed (no in-progress operation, or libalpm refused);
-            // tear the lock down ourselves so we don't leak db.lck.
             unsafe {
                 let _ = alpm_sys::alpm_trans_release(p);
                 let _ = alpm_sys::alpm_unlock(p);
@@ -113,6 +109,32 @@ pub fn install_signal_handler() -> std::result::Result<(), ctrlc::Error> {
         // sigaction loop).
         std::process::exit(130);
     })
+}
+
+/// Interrupt the in-flight libalpm transaction, if any.
+///
+/// Reads the raw handle stashed by the active [`TransGuard`] and, when
+/// non-null, calls libalpm's `alpm_trans_interrupt` on it. Returns `true` if a
+/// transaction was present and accepted the interrupt, `false` if there was no
+/// active handle or libalpm refused. No-ops (returns `false`) on a null handle;
+/// never panics.
+///
+/// This is the same primitive the SIGINT/SIGTERM handler uses (which now calls
+/// this fn). It is designed to be called from another thread: the stashed
+/// handle is only ever an address (`Send`), and `alpm_trans_interrupt` is the
+/// C-side interrupt primitive intended for concurrent use against an in-flight
+/// transaction. Exposed so `mizd`'s `Job.Cancel` can interrupt a running
+/// transaction from its async task while the worker thread drives libalpm.
+pub fn interrupt_active_transaction() -> bool {
+    let p = ALPM_HANDLE.load(Ordering::SeqCst);
+    if p.is_null() {
+        return false;
+    }
+    // SAFETY: `p` is a valid alpm handle owned by the transaction's owning
+    // thread for the lifetime of the current TransGuard. `alpm_trans_interrupt`
+    // is designed for cross-thread/signal use.
+    let r = unsafe { alpm_sys::alpm_trans_interrupt(p) };
+    r == 0
 }
 
 pub(crate) fn prepare(alpm: &mut Alpm) -> Result<()> {
@@ -225,4 +247,17 @@ pub(crate) fn collect_pkgs<'a, I: IntoIterator<Item = &'a Package>>(
     it.into_iter()
         .map(|p| (p.name().to_string(), p.version().as_str().to_string()))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// With no active transaction the handle is null; the cancel helper must
+    /// no-op and report `false` without touching libalpm or panicking.
+    #[test]
+    fn interrupt_no_ops_on_null_handle() {
+        ALPM_HANDLE.store(ptr::null_mut(), Ordering::SeqCst);
+        assert!(!interrupt_active_transaction());
+    }
 }
