@@ -1,0 +1,12 @@
+[package]
+name        = "mizd"
+version     = "0.1.0"
+edition     = "2021"
+description = "D-Bus daemon exposing miz layered-package operations (org.archetype.miz1)"
+license     = "GPL-2.0-or-later"
+
+[dependencies]
+miz-core           = { path = "../miz-core" }
+zbus               = { workspace = true }
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
