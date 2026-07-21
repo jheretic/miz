@@ -1,9 +1,31 @@
 # Plan: `mizd` — a D-Bus daemon for layered-package operations
 
-Status: planned 2026-07-12. Follows the structured-results refactor + the
-`miz-core` crate split (both committed, image-tested). `mizd` is the daemon the
-whole refactor was building toward. This plan designs it; execution happens in
-reviewed phases like the prior efforts.
+Status: IMPLEMENTED 2026-07 (v1, no Cancel). Phases 1-5 committed + reviewed;
+alpm/polkit/system-bus paths are VM-validation-only (see the flags below).
+Follows the structured-results refactor + the `miz-core` crate split. `mizd` is
+the daemon the whole refactor was building toward.
+
+## v1 status
+
+- Phase 1 (miz-core AssumeYes + interrupt helper), Phase 2 (interface
+  skeleton), Phase 3 (worker + read-only/refresh), Phase 4 (mutating methods +
+  polkit + data files), Phase 5 (packaging) — all done.
+- **Cancel is NOT in v1.** `Job.Cancel` returns `NotSupported`. Two adversarial
+  reviews found that a cross-thread `alpm_trans_interrupt` races libalpm's
+  non-atomic transaction state (a C data race in a root daemon); the
+  signal-handler precedent does NOT apply (a signal suspends its thread, a
+  D-Bus thread runs concurrently). Safe cancellation needs the interrupt to run
+  ON the worker thread (a flag/self-pipe polled between libalpm phases — cancels
+  at phase boundaries, which is what pacman does) or a subprocess-per-
+  transaction. Planned follow-up; NOT on the GS-plugin critical path
+  (Preview→Install works without cancel).
+- **VM-validation-only** (cannot run against the fake-alpm stub / no polkit /
+  no privileged bus on the dev host): every worker transaction, the polkit
+  CheckAuthorization round-trip, D-Bus activation + the installed data files,
+  the Job progress/JobRemoved lifecycle on a live bus, and CLI-vs-daemon
+  db.lck contention.
+
+The original design below is retained for reference.
 
 ## Purpose + scope
 

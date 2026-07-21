@@ -85,10 +85,15 @@ diagnostics at hard-error points — see the carve-out below.)
 
 ## The abstraction boundary a daemon reimplements — the `mizd` attach point
 
-A future `mizd` daemon depends on `miz-core`, calls the relevant
-`operations::<verb>::run(...)`, and supplies its OWN implementations of the two
-seam traits, rendering the SAME structured results over D-Bus instead of to a
-TTY. The exact signature is per-verb, not uniform: read-only verbs take just
+REALIZED: `crates/mizd` (v1, see `docs/mizd-plan.md`) is this daemon. It depends
+on `miz-core`, calls the relevant `operations::<verb>::run(...)`, and supplies
+its OWN implementations of the two seam traits, rendering the SAME structured
+results over D-Bus (`org.archetype.miz1`) instead of to a TTY. It uses the
+`AssumeYes` confirmer + a `PreviewInstall` inspect step (the GS download/apply
+split), a `ChannelSink` `ProgressSink` that forwards `ProgressEvent`s over an
+mpsc to D-Bus `Job.Progress` signals, and serializes all libalpm work on a
+single worker thread. (v1 has no Cancel — cross-thread transaction interrupt is
+unsafe; deferred. See mizd-plan.md.) The exact signature is per-verb, not uniform: read-only verbs take just
 `(params, &ctx)` (e.g. `database::run`), `version::run` takes nothing, and the
 transactional verbs (`sync`/`remove`/`upgrade`) + `images` take a
 `&mut dyn Confirmer` and a `&SharedSink`. A daemon supplies a policy `Confirmer`
