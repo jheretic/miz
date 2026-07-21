@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+        "https://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+
+<!--
+  SPDX-License-Identifier: GPL-2.0-or-later
+
+  polkit actions for mizd (org.archetype.miz1), the layered-package daemon.
+
+  Two tiers, mirroring systemd-sysupdated:
+    refresh - read + sync-db refresh; allowed for an active local session
+              without extra authentication (matches sysupdate's .check).
+    install - mutating transactions (install/remove/upgrade); requires admin
+              authentication, retained briefly (matches sysupdate's mutation
+              tier being auth-gated).
+-->
+
+<policyconfig>
+
+        <vendor>Archetype</vendor>
+
+        <action id="org.archetype.miz1.refresh">
+                <description>Refresh package databases and query package state</description>
+                <message>Authentication is required to refresh package databases.</message>
+                <defaults>
+                        <allow_any>auth_admin</allow_any>
+                        <allow_inactive>auth_admin</allow_inactive>
+                        <allow_active>yes</allow_active>
+                </defaults>
+        </action>
+
+        <action id="org.archetype.miz1.install">
+                <description>Install, remove, or upgrade layered packages</description>
+                <message>Authentication is required to change layered packages.</message>
+                <defaults>
+                        <allow_any>auth_admin</allow_any>
+                        <allow_inactive>auth_admin</allow_inactive>
+                        <allow_active>auth_admin_keep</allow_active>
+                </defaults>
+        </action>
+
+</policyconfig>

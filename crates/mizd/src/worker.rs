@@ -17,8 +17,8 @@ use async_channel::{Receiver, Sender};
 use miz_core::common::progress::ProgressEvent;
 use miz_core::common::report::{AssumeYes, SyncReport};
 use miz_core::config::{self, Context};
-use miz_core::error::{MizError, Result};
-use miz_core::operations::{query, sync};
+use miz_core::error::Result;
+use miz_core::operations::{query, remove, sync};
 use miz_core::params;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -45,23 +45,20 @@ pub enum WorkerRequest {
         progress: Sender<ProgressEvent>,
         reply: Sender<Result<()>>,
     },
-    // Phase 4: mutating ops go through the same worker with AssumeYes. Defined
-    // now so the queue shape is stable; not yet dispatched by the Manager.
-    #[allow(dead_code)]
+    // Mutating ops go through the same worker with AssumeYes as the confirmer
+    // (no TTY in the daemon; the client inspects via PreviewInstall first).
     Install {
         packages: Vec<String>,
         flags: u32,
         progress: Sender<ProgressEvent>,
         reply: Sender<Result<()>>,
     },
-    #[allow(dead_code)]
     Remove {
         packages: Vec<String>,
         flags: u32,
         progress: Sender<ProgressEvent>,
         reply: Sender<Result<()>>,
     },
-    #[allow(dead_code)]
     Upgrade {
         flags: u32,
         progress: Sender<ProgressEvent>,
@@ -69,8 +66,8 @@ pub enum WorkerRequest {
     },
 }
 
-/// Spawn the worker thread and return the queue sender the Manager keeps.
-/// Dropping every sender ends the loop (the receiver closes).
+/// Spawn the worker thread and return the queue sender. Dropping every sender
+/// ends the loop.
 pub fn spawn() -> Sender<WorkerRequest> {
     let (tx, rx) = async_channel::unbounded::<WorkerRequest>();
     std::thread::Builder::new()
@@ -97,11 +94,28 @@ fn worker_loop(rx: Receiver<WorkerRequest>) {
             WorkerRequest::Refresh { progress, reply } => {
                 let _ = reply.send_blocking(refresh(progress));
             }
-            WorkerRequest::Install { reply, .. }
-            | WorkerRequest::Remove { reply, .. }
-            | WorkerRequest::Upgrade { reply, .. } => {
-                // Phase 4.
-                let _ = reply.send_blocking(Err(MizError::NotImplemented));
+            WorkerRequest::Install {
+                packages,
+                flags,
+                progress,
+                reply,
+            } => {
+                let _ = reply.send_blocking(install(packages, flags, progress));
+            }
+            WorkerRequest::Remove {
+                packages,
+                flags,
+                progress,
+                reply,
+            } => {
+                let _ = reply.send_blocking(remove(packages, flags, progress));
+            }
+            WorkerRequest::Upgrade {
+                flags,
+                progress,
+                reply,
+            } => {
+                let _ = reply.send_blocking(upgrade(flags, progress));
             }
         }
     }
@@ -185,12 +199,55 @@ fn preview_install(packages: Vec<String>) -> PreviewResult {
 /// holding that `Sender` is built, used, and dropped here (it is `!Send`).
 fn refresh(progress: Sender<ProgressEvent>) -> Result<()> {
     let mut ctx = build_ctx()?;
-    let sink: miz_core::common::progress::SharedSink =
-        Rc::new(RefCell::new(ChannelSink::new(progress)));
+    let sink = new_sink(progress);
     let mut confirmer = AssumeYes;
     let mut params = base_sync_params();
     params.refresh = 1;
     sync::run(params, &mut ctx, &mut confirmer, &sink).map(|_| ())
+}
+
+/// `-S <targets>`: a real layered install (no refresh, no print). Commits with
+/// AssumeYes; the client inspects via `PreviewInstall` first. VM-only (the stub
+/// libalpm aborts on a real transaction). `flags` is reserved for future option
+/// bits (none defined yet).
+fn install(packages: Vec<String>, _flags: u32, progress: Sender<ProgressEvent>) -> Result<()> {
+    let mut ctx = build_ctx()?;
+    let sink = new_sink(progress);
+    let mut confirmer = AssumeYes;
+    let mut params = base_sync_params();
+    params.targets = packages;
+    sync::run(params, &mut ctx, &mut confirmer, &sink).map(|_| ())
+}
+
+/// `-R <packages>`: remove layered packages. Commits with AssumeYes. VM-only.
+/// `flags` is reserved for future option bits (none defined yet).
+fn remove(packages: Vec<String>, _flags: u32, progress: Sender<ProgressEvent>) -> Result<()> {
+    let mut ctx = build_ctx()?;
+    let sink = new_sink(progress);
+    let mut confirmer = AssumeYes;
+    let params = base_remove_params(packages);
+    remove::run(params, &mut ctx, &mut confirmer, &sink).map(|_| ())
+}
+
+/// `-Syu`: full sysupgrade of layered packages. This is `sync::run` with
+/// `refresh=1` (dbs current) + `sysupgrade=1`, NOT `upgrade::run` (which is `-U`
+/// file install). Commits with AssumeYes. VM-only. `flags` is reserved for
+/// future option bits (none defined yet).
+fn upgrade(_flags: u32, progress: Sender<ProgressEvent>) -> Result<()> {
+    let mut ctx = build_ctx()?;
+    let sink = new_sink(progress);
+    let mut confirmer = AssumeYes;
+    let mut params = base_sync_params();
+    params.refresh = 1;
+    params.sysupgrade = 1;
+    sync::run(params, &mut ctx, &mut confirmer, &sink).map(|_| ())
+}
+
+/// Build the daemon `SharedSink` forwarding `ProgressEvent`s over `progress`.
+/// The `!Send` `SharedSink` is created here on the worker thread and never
+/// escapes it; only the `Send` `Sender` inside crossed the thread boundary.
+fn new_sink(progress: Sender<ProgressEvent>) -> miz_core::common::progress::SharedSink {
+    Rc::new(RefCell::new(ChannelSink::new(progress)))
 }
 
 /// A sink whose events go nowhere (the preview path emits no user progress but
@@ -229,6 +286,26 @@ fn list_pairs(report: miz_core::common::report::QueryReport) -> Vec<(String, Str
     match report.body {
         QueryBody::List { pkgs, .. } => pkgs.into_iter().map(|p| (p.name, p.version)).collect(),
         _ => Vec::new(),
+    }
+}
+
+/// Baseline remove params for `-R <packages>`: no cascade/recursive/nosave,
+/// AssumeYes handles confirmation on the worker.
+fn base_remove_params(packages: Vec<String>) -> params::remove::Params {
+    params::remove::Params {
+        cascade: false,
+        nodeps: 0,
+        nosave: false,
+        print: false,
+        print_format: None,
+        recursive: 0,
+        unneeded: false,
+        assume_installed: Vec::new(),
+        dbonly: false,
+        noconfirm: false,
+        noprogressbar: false,
+        noscriptlet: false,
+        packages,
     }
 }
 
@@ -308,6 +385,15 @@ mod tests {
         assert_eq!(p.refresh, 0);
         assert!(!p.print);
         assert!(p.targets.is_empty());
+    }
+
+    #[test]
+    fn base_remove_params_carries_packages_only() {
+        let p = base_remove_params(vec!["foo".into(), "bar".into()]);
+        assert_eq!(p.packages, vec!["foo".to_string(), "bar".to_string()]);
+        assert!(!p.print);
+        assert!(!p.cascade);
+        assert_eq!(p.recursive, 0);
     }
 
     #[test]

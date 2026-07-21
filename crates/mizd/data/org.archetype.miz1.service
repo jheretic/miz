@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# D-Bus activation for mizd. Starting the well-known name org.archetype.miz1
+# starts mizd.service via systemd (so the daemon is not always running).
+
+[D-BUS Service]
+Name=org.archetype.miz1
+Exec=/usr/bin/mizd
+User=root
+SystemdService=mizd.service

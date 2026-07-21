@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# mizd - D-Bus daemon exposing miz layered-package operations
+# (org.archetype.miz1). D-Bus activated (see org.archetype.miz1.service);
+# Type=dbus so systemd tracks acquisition of the well-known bus name.
+
+[Unit]
+Description=miz layered-package D-Bus daemon
+Documentation=man:mizd(8)
+
+[Service]
+Type=dbus
+BusName=org.archetype.miz1
+ExecStart=/usr/bin/mizd

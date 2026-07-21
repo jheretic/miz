@@ -7,6 +7,7 @@
 
 mod job;
 mod manager;
+mod polkit;
 mod sink;
 mod worker;
 

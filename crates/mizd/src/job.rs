@@ -65,7 +65,14 @@ pub fn job_path(id: u32) -> OwnedObjectPath {
 
 /// A served Job object. `progress` is shared with the job's driver task (the
 /// refresh loop) via an `Arc<AtomicU32>` so the served `Progress` property
-/// reflects live progress; `Cancel` is a Phase-4 no-op stub.
+/// reflects live progress.
+///
+/// v1 has NO Cancel: safely cancelling a synchronous libalpm transaction
+/// requires interrupting ON the worker thread (or a subprocess-per-transaction)
+/// — a cross-thread `alpm_trans_interrupt` races libalpm's non-atomic
+/// transaction state. `Cancel` therefore returns `NotSupported`; real
+/// cancellation is a planned follow-up. So `Job` carries no action tier or
+/// cancelled-set (both existed only for the removed cancel path).
 pub struct Job {
     id: u32,
     kind: String,
@@ -105,9 +112,17 @@ impl Job {
         self.progress.load(Ordering::SeqCst)
     }
 
-    /// Cancel the job. Phase 4 wires this to `alpm_trans_interrupt` via the
-    /// worker; this phase is a no-op stub.
-    fn cancel(&self) {}
+    /// Cancel the job. NOT SUPPORTED in v1: safely interrupting a synchronous
+    /// libalpm transaction requires doing so on the worker thread (or a
+    /// subprocess per transaction) — a cross-thread `alpm_trans_interrupt`
+    /// races libalpm's non-atomic transaction state (a C data race in a root
+    /// daemon). Returns `NotSupported`; real cancellation is a planned
+    /// follow-up (see docs/mizd-plan.md).
+    fn cancel(&self) -> zbus::fdo::Result<()> {
+        Err(zbus::fdo::Error::NotSupported(
+            "cancellation is not supported in this version".into(),
+        ))
+    }
 
     /// `Progress(u percent, s message)` — emitted as the transaction advances.
     /// Rust name differs from the property `progress`; D-Bus member stays
@@ -123,6 +138,13 @@ impl Job {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn job_stores_its_id_and_kind() {
+        let r = Job::new(3, "refresh");
+        assert_eq!(r.id, 3);
+        assert_eq!(r.kind, "refresh");
+    }
 
     #[test]
     fn ids_are_monotonic() {
