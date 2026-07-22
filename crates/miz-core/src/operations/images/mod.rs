@@ -489,6 +489,7 @@ fn images_upgrade(
 }
 
 /// Outcome of resolving a bare `-Iu` (no explicit version).
+#[derive(Debug)]
 enum UpgradePlan {
     /// A newer version is available; acquire newest (empty arg, no-auth).
     Newest,
@@ -526,25 +527,42 @@ fn acquire_args(plan: &UpgradePlan) -> (String, bool) {
 /// * else [`UpgradePlan::UpToDate`].
 fn resolve_upgrade_plan(proxy: &TargetProxyBlocking<'_>) -> Result<UpgradePlan> {
     let newest = proxy.check_new().unwrap_or_default();
-    if !newest.is_empty() {
-        return Ok(UpgradePlan::Newest);
-    }
-    // No newer version. Complete the installed one only if it is incomplete, so
-    // a plain no-op `-Iu` stays a no-op (never re-installs needlessly).
     let installed = proxy.get_version().unwrap_or_default();
-    if installed.is_empty() {
-        return Ok(UpgradePlan::UpToDate);
-    }
-    let incomplete = proxy
-        .describe(&installed, 0)
-        .ok()
-        .and_then(|json| Describe::parse(&json).ok())
-        .and_then(|d| d.incomplete)
-        .unwrap_or(false);
-    if incomplete {
-        Ok(UpgradePlan::Complete(installed))
+    // `incomplete` is only meaningful for a real installed version; skip the
+    // Describe round-trip when there's nothing installed.
+    let incomplete = if installed.is_empty() {
+        false
     } else {
-        Ok(UpgradePlan::UpToDate)
+        proxy
+            .describe(&installed, 0)
+            .ok()
+            .and_then(|json| Describe::parse(&json).ok())
+            .and_then(|d| d.incomplete)
+            .unwrap_or(false)
+    };
+    Ok(plan_from(&newest, &installed, incomplete))
+}
+
+/// Pure decision for a bare `-Iu`, split out so the feature-vs-host-advance
+/// distinction is testable without a live bus.
+///
+/// `CheckNew` reports a feature's missing transfer by returning the CURRENTLY
+/// INSTALLED version (features are "considered when checking for updates" --
+/// sysupdate.features(5)), so `newest == installed` is NOT a host advance: it's
+/// a just-enabled feature to complete in place. Routing that through `Newest`
+/// would set `host_changed=true` and drive the root-snapshot relay, which then
+/// fails ("new version equals the running version; nothing to relay").
+fn plan_from(newest: &str, installed: &str, incomplete: bool) -> UpgradePlan {
+    // A version strictly newer than installed -> genuine host advance (relay).
+    if !newest.is_empty() && newest != installed {
+        return UpgradePlan::Newest;
+    }
+    // Otherwise complete the installed version only if it is incomplete, so a
+    // plain no-op `-Iu` stays a no-op (never re-installs needlessly).
+    if !installed.is_empty() && incomplete {
+        UpgradePlan::Complete(installed.to_string())
+    } else {
+        UpgradePlan::UpToDate
     }
 }
 
@@ -588,7 +606,7 @@ fn do_reboot(conn: &zbus::blocking::Connection) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{acquire_args, list_flags, split_component, UpgradePlan, FLAG_OFFLINE};
+    use super::{acquire_args, list_flags, plan_from, split_component, UpgradePlan, FLAG_OFFLINE};
 
     #[test]
     fn acquire_args_newest_uses_empty_arg_for_no_auth_update() {
@@ -614,6 +632,50 @@ mod tests {
         let (arg, host_changed) = acquire_args(&UpgradePlan::ToVersion("2026.07.09-1".into()));
         assert_eq!(arg, "2026.07.09-1");
         assert!(host_changed);
+    }
+
+    #[test]
+    fn plan_newest_when_a_strictly_newer_version_exists() {
+        assert!(matches!(
+            plan_from("2026.07.10-1", "2026.07.09-1", false),
+            UpgradePlan::Newest
+        ));
+    }
+
+    #[test]
+    fn plan_completes_when_checknew_equals_installed_and_incomplete() {
+        // The regression: enabling a feature makes CheckNew return the INSTALLED
+        // version (non-empty, == installed). That must complete in place, NOT
+        // route through Newest (which would run the relay and fail with
+        // "new version equals the running version; nothing to relay").
+        match plan_from("2026.07.09-1", "2026.07.09-1", true) {
+            UpgradePlan::Complete(v) => assert_eq!(v, "2026.07.09-1"),
+            other => panic!("expected Complete, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plan_uptodate_when_equal_and_complete() {
+        // Same version, nothing incomplete -> a plain no-op -Iu stays a no-op.
+        assert!(matches!(
+            plan_from("2026.07.09-1", "2026.07.09-1", false),
+            UpgradePlan::UpToDate
+        ));
+    }
+
+    #[test]
+    fn plan_completes_when_checknew_empty_but_installed_incomplete() {
+        // Belt-and-suspenders: on a systemd where CheckNew returns "" for an
+        // incomplete install, the incomplete branch still completes it.
+        match plan_from("", "2026.07.09-1", true) {
+            UpgradePlan::Complete(v) => assert_eq!(v, "2026.07.09-1"),
+            other => panic!("expected Complete, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plan_uptodate_when_nothing_installed_and_no_newest() {
+        assert!(matches!(plan_from("", "", false), UpgradePlan::UpToDate));
     }
 
     #[test]
