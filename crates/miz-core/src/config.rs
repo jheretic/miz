@@ -496,7 +496,16 @@ fn merge_repos_by_name(vendor: Vec<toml::Value>, user: Vec<toml::Value>) -> Vec<
 fn apply_config(alpm: &mut Alpm, conf: &MizConfig) -> Result<()> {
     let opts = &conf.options;
     alpm.set_cachedirs(paths_to_strs(&opts.cache_dir).iter().copied())?;
-    alpm.set_hookdirs(paths_to_strs(&opts.hook_dir).iter().copied())?;
+    // APPEND the admin hookdirs, do NOT set_hookdirs: alpm_initialize seeds the
+    // list with the system hookdir (<root>/usr/share/libalpm/hooks/, where the
+    // packaged hooks like 20-systemd-sysusers/30-systemd-tmpfiles live), and
+    // alpm_option_set_hookdirs FREES that seeded list before adding ours -- so
+    // set_hookdirs silently drops every packaged hook (sysusers never reach
+    // /etc/passwd, tmpfiles never run). pacman appends via alpm_option_add_hookdir
+    // (conf.c) for exactly this reason; mirror it.
+    for dir in paths_to_strs(&opts.hook_dir) {
+        alpm.add_hookdir(dir)?;
+    }
     alpm.set_gpgdir(path_to_str(&opts.gpg_dir))?;
     alpm.set_logfile(path_to_str(&opts.log_file))?;
     alpm.set_ignorepkgs(opts.ignore_pkg.iter().map(String::as_str))?;
