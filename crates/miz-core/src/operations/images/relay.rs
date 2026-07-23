@@ -647,11 +647,28 @@ pub fn run(args: Args, _config_path: Option<&Path>, sink: &SharedSink) -> Result
 /// boot-time merge picks up the new extension, and refreshing against the OLD
 /// running `/usr` would merge the wrong base.
 pub fn refresh_sysext(dry_run: bool) -> Result<()> {
-    let cmd = PlannedCommand::new("refresh system extensions", &["systemd-sysext", "refresh"]);
     if dry_run {
         return Ok(());
     }
-    run_command(&cmd)
+    // Restrict the merge to /usr. systemd-sysext defaults to /usr:/opt, but our
+    // extensions ship only /usr; the /opt overlay then has a single (meta)
+    // lowerdir, which the kernel rejects with EINVAL, and because the merge is
+    // one pass that failure aborts the WHOLE refresh (so /usr never merges).
+    // systemd-sysext.service pins SYSTEMD_SYSEXT_HIERARCHIES=/usr via a drop-in,
+    // but that only applies to the unit -- a direct invocation gets the default
+    // and fails. Set it here too. CROSS-REPO CONTRACT: keep in sync with
+    // archetype-build's systemd-sysext.service.d/10-hierarchies.conf.
+    let status = std::process::Command::new("systemd-sysext")
+        .arg("refresh")
+        .env("SYSTEMD_SYSEXT_HIERARCHIES", "/usr")
+        .status()
+        .map_err(|e| MizError::Other(format!("failed to run 'systemd-sysext refresh': {e}")))?;
+    if !status.success() {
+        return Err(MizError::Other(format!(
+            "'systemd-sysext refresh' exited with {status}"
+        )));
+    }
+    Ok(())
 }
 
 /// the inactive slot. Snapshots the root per version and upgrades layered
