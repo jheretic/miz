@@ -464,13 +464,33 @@ fn images_upgrade(
     // it away) so render prints the upgrade line FIRST, then a relay failure is
     // surfaced by ImagesReport::outcome() -- matching the pre-refactor order
     // where "updated to" printed before the relay ran.
-    let (relay, error) = if component == "host" && host_changed {
+    let (relay, mut error) = if component == "host" && host_changed {
         match relay::relay_after_upgrade(&acq_ver, args.dry_run, args.quiet, sink) {
             Ok(r) => (Some(r), None),
             Err(e) => (None, Some(e.to_string())),
         }
     } else {
         (None, None)
+    };
+
+    // A feature completion (host did NOT advance) installed a sysext .raw into
+    // /var/lib/extensions but nothing merged it into the running /usr -- that
+    // otherwise only happens at boot. Refresh now so the tools appear without a
+    // reboot. Only for the host component (features attach to the /usr target),
+    // and NOT on a host advance (that reboots into the new /usr, whose boot
+    // merge handles it). A failure here is surfaced like a relay failure.
+    let sysext_refreshed = if component == "host" && !host_changed {
+        match relay::refresh_sysext(args.dry_run) {
+            Ok(()) => true,
+            Err(e) => {
+                if error.is_none() {
+                    error = Some(e.to_string());
+                }
+                false
+            }
+        }
+    } else {
+        false
     };
 
     // Reboot is deferred to main (after render) so the upgrade/relay status
@@ -485,6 +505,7 @@ fn images_upgrade(
         relay,
         reboot,
         error,
+        sysext_refreshed,
     }))
 }
 

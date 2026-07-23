@@ -633,6 +633,27 @@ pub fn run(args: Args, _config_path: Option<&Path>, sink: &SharedSink) -> Result
 }
 
 /// Invoked by `images_upgrade` after sysupdate has installed `new_version` to
+/// Re-merge system extensions into the running `/usr` after a feature transfer
+/// was installed live (`miz -Iu` for a newly enabled sysext feature).
+///
+/// sysupdate writes the extension `.raw` into `/var/lib/extensions/`, but that
+/// only becomes visible in `/usr` when `systemd-sysext` merges it -- which
+/// otherwise happens once, at boot (systemd-sysext.service). Without a live
+/// refresh the download "succeeds" but the tools never appear until reboot.
+/// `systemd-sysext refresh` is the documented mechanism for exactly this
+/// install-then-activate flow (systemd-sysext(8)). Idempotent: re-merges the
+/// current extension set. Only meaningful for a feature completion (the host
+/// `/usr` did NOT change) -- a host advance reboots into the new `/usr`, whose
+/// boot-time merge picks up the new extension, and refreshing against the OLD
+/// running `/usr` would merge the wrong base.
+pub fn refresh_sysext(dry_run: bool) -> Result<()> {
+    let cmd = PlannedCommand::new("refresh system extensions", &["systemd-sysext", "refresh"]);
+    if dry_run {
+        return Ok(());
+    }
+    run_command(&cmd)
+}
+
 /// the inactive slot. Snapshots the root per version and upgrades layered
 /// packages against the new image (see module docs).
 pub fn relay_after_upgrade(

@@ -444,6 +444,10 @@ pub enum ImageUpgradeOutcome {
         relay: Option<RelayReport>,
         reboot: bool,
         error: Option<String>,
+        /// A feature completion re-merged system extensions into the running
+        /// `/usr` (`systemd-sysext refresh`) so the sysext is live without a
+        /// reboot. Render notes it; only ever true for an in-place completion.
+        sysext_refreshed: bool,
     },
 }
 

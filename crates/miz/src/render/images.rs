@@ -172,6 +172,7 @@ fn render_upgrade(outcome: &ImageUpgradeOutcome) {
             host_changed,
             quiet,
             relay,
+            sysext_refreshed,
             ..
         } => {
             if !quiet {
@@ -181,6 +182,9 @@ fn render_upgrade(outcome: &ImageUpgradeOutcome) {
                     // In-place completion (e.g. a newly enabled feature): the
                     // version didn't advance, so "updated to" would mislead.
                     println!("{name}: {version} completed (in place)");
+                }
+                if *sysext_refreshed {
+                    println!("{name}: system extensions refreshed");
                 }
             }
             if let Some(relay) = relay {
